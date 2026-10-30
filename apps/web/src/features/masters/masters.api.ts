@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo } from 'react';
 import type {
   AirlineInput,
@@ -635,6 +635,74 @@ export function useHotels(params = new URLSearchParams()) {
       apiClient.get<HotelPage>(`/masters/hotels${query ? `?${query}` : ''}`, signal),
   });
 }
+/**
+ * Complete active hotel option set for the manual master picker — see
+ * {@link useAllCities}. The builder used to request a single 100-row page, so a
+ * hotel beyond that page could not be selected and typing its exact name left
+ * the row unlinked as free text. Paging the whole (tenant-visible, ACTIVE)
+ * result set makes every eligible hotel selectable while keeping the same
+ * filters and permissions as {@link useHotels}.
+ */
+export function useAllHotels(params = new URLSearchParams()) {
+  const filterKey = masterFilterKey(params);
+  return useQuery({
+    queryKey: [...hotelKeys.all, 'all', filterKey],
+    queryFn: ({ signal }) =>
+      fetchAllMasterPages<HotelSummary>('/masters/hotels', new URLSearchParams(filterKey), signal),
+  });
+}
+
+export interface HotelPrefillPool {
+  data: HotelSummary[];
+  /** True while any destination query is still on its first load. */
+  isPending: boolean;
+  isError: boolean;
+}
+
+/**
+ * Complete, destination-scoped hotel pool for automatic default prefill.
+ *
+ * One query per relevant destination (`destinationId` filter), each paged to
+ * completion. This replaces relying on the first 100 newest hotels: a default
+ * hotel outside that window is still retrieved, and unrelated destinations are
+ * never fetched. Visibility (tenant + system-global) and ACTIVE status are
+ * enforced by the same list endpoint the Hotel Master screen uses.
+ *
+ * The combined result is structurally shared by React Query, so consumers can
+ * depend on `data` without re-running effects on every render.
+ */
+export function useHotelsForDestinations(destinationIds: readonly string[]) {
+  const ids = useMemo(
+    () => [...new Set(destinationIds.map((id) => id.trim()).filter(Boolean))].sort(),
+    [destinationIds],
+  );
+  return useQueries({
+    queries: ids.map((destinationId) => ({
+      queryKey: [...hotelKeys.all, 'byDestination', destinationId] as const,
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        fetchAllMasterPages<HotelSummary>(
+          '/masters/hotels',
+          new URLSearchParams({ status: 'ACTIVE', destinationId }),
+          signal,
+        ),
+      enabled: Boolean(destinationId),
+    })),
+    combine: (results): HotelPrefillPool => {
+      const byId = new Map<string, HotelSummary>();
+      for (const result of results) {
+        for (const row of result.data?.data ?? []) {
+          if (!byId.has(row.id)) byId.set(row.id, row);
+        }
+      }
+      return {
+        data: [...byId.values()],
+        isPending: results.some((result) => result.isPending),
+        isError: results.some((result) => result.isError),
+      };
+    },
+  });
+}
+
 export function useHotel(id?: string) {
   return useQuery({
     queryKey: hotelKeys.one(id ?? ''),

@@ -12000,6 +12000,596 @@ describe('Quotation Builder - default hotel destination prefill', () => {
     },
     20000,
   );
+
+  const expandAllHotelStays = async () => {
+    for (let guard = 0; guard < 10; guard += 1) {
+      const expands = screen.queryAllByRole('button', { name: /^Expand hotel stay \d+$/ });
+      if (!expands.length) return;
+      for (const button of expands) await userEvent.click(button);
+    }
+  };
+
+  it('prefills a single-destination default with master id and rate', async () => {
+    const grand = hotelMaster({
+      id: 'aaaaaa77-7777-4777-8777-777777777777',
+      name: 'Grand Singapore',
+      isDefaultForCity: true,
+      price: 6000,
+    });
+    vi.stubGlobal(
+      'fetch',
+      masterFetch(blankCityQuotation(), {
+        '/masters/hotels': page([grand]),
+        '/masters/destinations': page([
+          destinationMaster([{ id: 'city-sg', name: 'Singapore' }]),
+        ]),
+      }),
+    );
+    renderBuilderPage();
+    await openTab('Hotel');
+    await userEvent.click(screen.getByRole('button', { name: 'Expand hotel stay 1' }));
+    await waitFor(
+      () => expect(screen.getByLabelText('Hotel master')).toHaveValue('Grand Singapore'),
+      { timeout: 10000 },
+    );
+    await userEvent.click(screen.getAllByRole('button', { name: 'Save quotation' })[1]!);
+    const patchCall = await waitFor(
+      () => {
+        const call = (vi.mocked(fetch) as unknown as { mock: { calls: unknown[][] } }).mock.calls.find(
+          ([, options]) =>
+            (options as RequestInit)?.method === 'PATCH' &&
+            String((options as RequestInit)?.body ?? '').includes('Grand Singapore'),
+        );
+        expect(call).toBeDefined();
+        return call!;
+      },
+      { timeout: 10000 },
+    );
+    const body = JSON.parse(String((patchCall[1] as RequestInit).body)) as {
+      hotels: Array<{ hotelId: string; hotelName: string; sellingPrice: number; city: string }>;
+    };
+    expect(body.hotels[0]).toMatchObject({
+      hotelId: 'aaaaaa77-7777-4777-8777-777777777777',
+      hotelName: 'Grand Singapore',
+      city: 'Singapore',
+    });
+    expect(Number(body.hotels[0]!.sellingPrice)).toBe(6000);
+  }, 20000);
+
+  it('prefills every destination of a multi-city itinerary without mixing', async () => {    const sgDefault = hotelMaster({
+      id: 'aaaaaa88-8888-4888-8888-888888888888',
+      name: 'Grand Singapore',
+      isDefaultForCity: true,
+    });
+    const dxbDefault = {
+      ...hotelMaster({
+        id: 'aaaaaa99-9999-4999-8999-999999999999',
+        name: 'Burj View Hotel',
+        isDefaultForCity: true,
+      }),
+      destination: { id: 'dest-dxb', name: 'Dubai' },
+      city: { id: 'city-dxb', name: 'Dubai' },
+    };
+    const multi = {
+      ...builderQuotation(),
+      destinationSummary: 'Singapore Heaven Delight • Dubai',
+      query: {
+        id: 'lead-multi',
+        queryNumber: 'QRY-MULTI',
+        leadStage: 'NEW_LEAD',
+        departureCity: 'Delhi',
+        departureCountry: 'India',
+        itinerary: [
+          {
+            id: 'stay-1',
+            country: 'Singapore Heaven Delight',
+            destination: 'Singapore',
+            nights: 2,
+            sequence: 1,
+            arrivalDate: '2026-08-10T00:00:00.000Z',
+            departureDate: '2026-08-12T00:00:00.000Z',
+          },
+          {
+            id: 'stay-2',
+            country: 'Dubai',
+            destination: 'Dubai',
+            nights: 2,
+            sequence: 2,
+            arrivalDate: '2026-08-12T00:00:00.000Z',
+            departureDate: '2026-08-14T00:00:00.000Z',
+          },
+        ],
+      },
+    };
+    vi.stubGlobal(
+      'fetch',
+      masterFetch(multi, {
+        '/masters/hotels': page([sgDefault, dxbDefault]),
+        '/masters/destinations': page([
+          destinationMaster([{ id: 'city-sg', name: 'Singapore' }]),
+          {
+            id: 'dest-dxb',
+            countryCode: 'AE',
+            countryName: 'UAE',
+            name: 'Dubai',
+            destinationType: 'CITY',
+            status: 'ACTIVE',
+            inclusions: null,
+            exclusions: null,
+            paymentPolicies: null,
+            cancellationPolicies: null,
+            bookingTerms: null,
+            childPolicy: null,
+            cities: [{ id: 'dc-dxb', cityId: 'city-dxb', sequence: 1, city: { id: 'city-dxb', name: 'Dubai' } }],
+            _count: { cities: 1 },
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ]),
+      }),
+    );
+    renderBuilderPage();
+    await openTab('Hotel');
+    await expandAllHotelStays();
+    await waitFor(
+      () => expect(screen.getAllByLabelText('Hotel master')).toHaveLength(2),
+      { timeout: 10000 },
+    );
+    const values = screen.getAllByLabelText('Hotel master').map((el) => (el as HTMLInputElement).value).sort();
+    expect(values).toEqual(['Burj View Hotel', 'Grand Singapore']);
+  }, 20000);
+
+  it('prefills a blank-city lead through its destination', async () => {
+    const grand = hotelMaster({
+      id: 'aaaaaa77-7777-4777-8777-777777777777',
+      name: 'Grand Singapore',
+      isDefaultForCity: true,
+    });
+    vi.stubGlobal(
+      'fetch',
+      masterFetch(blankCityQuotation(), {
+        '/masters/hotels': page([grand]),
+        '/masters/destinations': page([
+          destinationMaster([{ id: 'city-sg', name: 'Singapore' }]),
+        ]),
+      }),
+    );
+    renderBuilderPage();
+    await openTab('Hotel');
+    await userEvent.click(screen.getByRole('button', { name: 'Expand hotel stay 1' }));
+    await waitFor(
+      () => expect(screen.getByLabelText('Hotel master')).toHaveValue('Grand Singapore'),
+      { timeout: 10000 },
+    );
+  }, 20000);
+
+  it('preserves saved hotels, prices and typed names', async () => {
+    const grand = hotelMaster({
+      id: 'aaaaaa77-7777-4777-8777-777777777777',
+      name: 'Grand Singapore',
+      isDefaultForCity: true,
+    });
+    // NOTE: saved rows use roomLines: [{...}] with an explicit room type —
+    // legacy scalar-only rows (rooms set, no room type) are rejected by the
+    // shared room-line validation on save, independent of hotel prefill.
+    const savedRoomLine = {
+      hotelRoomTypeId: null,
+      roomType: 'Deluxe',
+      rooms: 1,
+      extraBedQuantity: null,
+      extraBedPrice: null,
+      childWithoutBedQuantity: null,
+      childWithoutBedPrice: null,
+      baseRoomPrice: null,
+      pricingSource: null,
+      sellingPrice: null,
+      internalCost: null,
+      notes: null,
+    };
+    const saved = builderQuotation({
+      hotels: [
+        {
+          id: 'saved-1',
+          city: 'Singapore',
+          hotelId: 'aaaaaaa1-1111-4111-8111-111111111111',
+          hotelName: 'Shah Palace Hotel',
+          hotelRoomTypeId: null,
+          hotelMealPlanId: null,
+          roomType: null,
+          mealPlan: null,
+          rooms: 1,
+          roomLines: [{ ...savedRoomLine }],
+          mealPlanLines: [],
+          nights: 2,
+          checkInDate: '2026-08-10T00:00:00.000Z',
+          checkOutDate: '2026-08-12T00:00:00.000Z',
+          checkInTime: null,
+          checkOutTime: null,
+          showCheckInTime: false,
+          showCheckOutTime: false,
+          internalCost: 4000,
+          sellingPrice: 9000,
+          baseRoomPrice: null,
+          extraBedQuantity: null,
+          extraBedPrice: null,
+          childWithoutBedQuantity: null,
+          childWithoutBedPrice: null,
+          pricingSource: null,
+          category: '5 Star',
+          selected: true,
+          notes: null,
+          sequence: 1,
+          images: [],
+          imageSnapshotPresent: false,
+          pdfImageUrl: null,
+        },
+        {
+          id: 'saved-2',
+          city: 'Singapore',
+          hotelId: null,
+          hotelName: 'My Custom Hotel',
+          hotelRoomTypeId: null,
+          hotelMealPlanId: null,
+          roomType: null,
+          mealPlan: null,
+          rooms: null,
+          roomLines: [],
+          mealPlanLines: [],
+          nights: 1,
+          checkInDate: null,
+          checkOutDate: null,
+          checkInTime: null,
+          checkOutTime: null,
+          showCheckInTime: false,
+          showCheckOutTime: false,
+          internalCost: 0,
+          sellingPrice: 5000,
+          baseRoomPrice: null,
+          extraBedQuantity: null,
+          extraBedPrice: null,
+          childWithoutBedQuantity: null,
+          childWithoutBedPrice: null,
+          pricingSource: null,
+          category: null,
+          selected: true,
+          notes: null,
+          sequence: 2,
+          images: [],
+          imageSnapshotPresent: false,
+          pdfImageUrl: null,
+        },
+      ],
+    });
+    const fetchMock = masterFetch(saved, {
+      '/masters/hotels': page([grand]),
+      '/masters/destinations': page([
+        destinationMaster([{ id: 'city-sg', name: 'Singapore' }]),
+      ]),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderBuilderPage();
+    await openTab('Hotel');
+    await userEvent.click(screen.getByRole('button', { name: 'Expand hotel stay 1' }));
+    await waitFor(
+      () => expect(screen.getByLabelText('Hotel master')).toHaveValue('Shah Palace Hotel'),
+      { timeout: 10000 },
+    );
+    await userEvent.click(screen.getAllByRole('button', { name: 'Save quotation' })[1]!);
+    const patchCall = await waitFor(
+      () => {
+        const call = fetchMock.mock.calls.find(
+          ([, options]) => (options as RequestInit)?.method === 'PATCH',
+        );
+        expect(call).toBeDefined();
+        return call!;
+      },
+      { timeout: 10000 },
+    );
+    const body = JSON.parse(String((patchCall[1] as RequestInit).body)) as {
+      hotels: Array<{ hotelId: string | null; hotelName: string; sellingPrice: number }>;
+    };
+    expect(body.hotels[0]).toMatchObject({
+      hotelId: 'aaaaaaa1-1111-4111-8111-111111111111',
+      hotelName: 'Shah Palace Hotel',
+      sellingPrice: 9000,
+    });
+    expect(body.hotels[1]).toMatchObject({ hotelId: null, hotelName: 'My Custom Hotel' });
+  }, 20000);
+
+  it('fills a saved empty stay without touching selected rows', async () => {
+    const grand = hotelMaster({
+      id: 'aaaaaa77-7777-4777-8777-777777777777',
+      name: 'Grand Singapore',
+      isDefaultForCity: true,
+    });
+    const saved = builderQuotation({
+      hotels: [
+        {
+          id: 'saved-1',
+          city: 'Singapore',
+          hotelId: 'aaaaaaa1-1111-4111-8111-111111111111',
+          hotelName: 'Shah Palace Hotel',
+          hotelRoomTypeId: null,
+          hotelMealPlanId: null,
+          roomType: null,
+          mealPlan: null,
+          rooms: 1,
+          roomLines: [],
+          mealPlanLines: [],
+          nights: 2,
+          checkInDate: '2026-08-10T00:00:00.000Z',
+          checkOutDate: '2026-08-12T00:00:00.000Z',
+          checkInTime: null,
+          checkOutTime: null,
+          showCheckInTime: false,
+          showCheckOutTime: false,
+          internalCost: 4000,
+          sellingPrice: 9000,
+          baseRoomPrice: null,
+          extraBedQuantity: null,
+          extraBedPrice: null,
+          childWithoutBedQuantity: null,
+          childWithoutBedPrice: null,
+          pricingSource: null,
+          category: '5 Star',
+          selected: true,
+          notes: null,
+          sequence: 1,
+          images: [],
+          imageSnapshotPresent: false,
+          pdfImageUrl: null,
+        },
+        {
+          id: 'empty-2',
+          city: 'Singapore',
+          hotelId: null,
+          hotelName: '',
+          hotelRoomTypeId: null,
+          hotelMealPlanId: null,
+          roomType: null,
+          mealPlan: null,
+          rooms: null,
+          roomLines: [],
+          mealPlanLines: [],
+          nights: 1,
+          checkInDate: null,
+          checkOutDate: null,
+          checkInTime: null,
+          checkOutTime: null,
+          showCheckInTime: false,
+          showCheckOutTime: false,
+          internalCost: 0,
+          sellingPrice: 0,
+          baseRoomPrice: null,
+          extraBedQuantity: null,
+          extraBedPrice: null,
+          childWithoutBedQuantity: null,
+          childWithoutBedPrice: null,
+          pricingSource: null,
+          category: null,
+          selected: true,
+          notes: null,
+          sequence: 2,
+          images: [],
+          imageSnapshotPresent: false,
+          pdfImageUrl: null,
+        },
+      ],
+    });
+    vi.stubGlobal(
+      'fetch',
+      masterFetch(saved, {
+        '/masters/hotels': page([grand]),
+        '/masters/destinations': page([
+          destinationMaster([{ id: 'city-sg', name: 'Singapore' }]),
+        ]),
+      }),
+    );
+    renderBuilderPage();
+    await openTab('Hotel');
+    await expandAllHotelStays();
+    await waitFor(
+      () => expect(screen.getAllByLabelText('Hotel master')).toHaveLength(2),
+      { timeout: 10000 },
+    );
+    const values = screen.getAllByLabelText('Hotel master').map((el) => (el as HTMLInputElement).value);
+    expect(values).toContain('Shah Palace Hotel');
+    expect(values).toContain('Grand Singapore');
+  }, 20000);
+
+  it('adds a stay after an existing one with the neighbour city default', async () => {
+    const first = hotelMaster({
+      id: 'aaaaaa81-8181-4818-8818-818181818181',
+      name: 'Alpha Stay',
+      isDefaultForCity: true,
+    });
+    const second = hotelMaster({
+      id: 'aaaaaa82-8282-4828-8828-828282828282',
+      name: 'Beta Stay',
+      isDefaultForCity: true,
+    });
+    const saved = builderQuotation({
+      hotels: [
+        {
+          id: 'saved-1',
+          city: 'Singapore',
+          hotelId: 'aaaaaa81-8181-4818-8818-818181818181',
+          hotelName: 'Alpha Stay',
+          hotelRoomTypeId: null,
+          hotelMealPlanId: null,
+          roomType: null,
+          mealPlan: null,
+          rooms: null,
+          roomLines: [],
+          mealPlanLines: [],
+          nights: 2,
+          checkInDate: '2026-08-10T00:00:00.000Z',
+          checkOutDate: '2026-08-12T00:00:00.000Z',
+          checkInTime: null,
+          checkOutTime: null,
+          showCheckInTime: false,
+          showCheckOutTime: false,
+          internalCost: 0,
+          sellingPrice: 0,
+          baseRoomPrice: null,
+          extraBedQuantity: null,
+          extraBedPrice: null,
+          childWithoutBedQuantity: null,
+          childWithoutBedPrice: null,
+          pricingSource: null,
+          category: null,
+          selected: true,
+          notes: null,
+          sequence: 1,
+          images: [],
+          imageSnapshotPresent: false,
+          pdfImageUrl: null,
+        },
+      ],
+    });
+    vi.stubGlobal(
+      'fetch',
+      masterFetch(saved, {
+        '/masters/hotels': page([first, second]),
+        '/masters/destinations': page([
+          destinationMaster([{ id: 'city-sg', name: 'Singapore' }]),
+        ]),
+      }),
+    );
+    renderBuilderPage();
+    await openTab('Hotel');
+    await userEvent.click(screen.getByRole('button', { name: 'Expand hotel stay 1' }));
+    await waitFor(
+      () => expect(screen.getByLabelText('Hotel master')).toHaveValue('Alpha Stay'),
+      { timeout: 10000 },
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Add hotel after stay 1' }));
+    await expandAllHotelStays();
+    await waitFor(
+      () => expect(screen.getAllByLabelText('Hotel master')).toHaveLength(2),
+      { timeout: 10000 },
+    );
+    await waitFor(
+      () =>
+        expect(
+          screen.getAllByLabelText('Hotel master').map((el) => (el as HTMLInputElement).value),
+        ).toContain('Beta Stay'),
+      { timeout: 10000 },
+    );
+  }, 20000);
+
+  it('adds a stay before an existing one without duplicating the present default', async () => {
+    const first = hotelMaster({
+      id: 'aaaaaa81-8181-4818-8818-818181818181',
+      name: 'Alpha Stay',
+      isDefaultForCity: true,
+    });
+    const saved = builderQuotation({
+      hotels: [
+        {
+          id: 'saved-1',
+          city: 'Singapore',
+          hotelId: 'aaaaaa81-8181-4818-8818-818181818181',
+          hotelName: 'Alpha Stay',
+          hotelRoomTypeId: null,
+          hotelMealPlanId: null,
+          roomType: null,
+          mealPlan: null,
+          rooms: null,
+          roomLines: [],
+          mealPlanLines: [],
+          nights: 2,
+          checkInDate: '2026-08-10T00:00:00.000Z',
+          checkOutDate: '2026-08-12T00:00:00.000Z',
+          checkInTime: null,
+          checkOutTime: null,
+          showCheckInTime: false,
+          showCheckOutTime: false,
+          internalCost: 0,
+          sellingPrice: 0,
+          baseRoomPrice: null,
+          extraBedQuantity: null,
+          extraBedPrice: null,
+          childWithoutBedQuantity: null,
+          childWithoutBedPrice: null,
+          pricingSource: null,
+          category: null,
+          selected: true,
+          notes: null,
+          sequence: 1,
+          images: [],
+          imageSnapshotPresent: false,
+          pdfImageUrl: null,
+        },
+      ],
+    });
+    vi.stubGlobal(
+      'fetch',
+      masterFetch(saved, {
+        '/masters/hotels': page([first]),
+        '/masters/destinations': page([
+          destinationMaster([{ id: 'city-sg', name: 'Singapore' }]),
+        ]),
+      }),
+    );
+    renderBuilderPage();
+    await openTab('Hotel');
+    await userEvent.click(screen.getByRole('button', { name: 'Expand hotel stay 1' }));
+    await waitFor(
+      () => expect(screen.getByLabelText('Hotel master')).toHaveValue('Alpha Stay'),
+      { timeout: 10000 },
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Add hotel before stay 1' }));
+    await expandAllHotelStays();
+    await waitFor(
+      () => expect(screen.getAllByLabelText('Hotel master')).toHaveLength(2),
+      { timeout: 10000 },
+    );
+    // The only default is already used → the new stay stays empty, never duplicated.
+    await waitFor(
+      () => {
+        const values = screen
+          .getAllByLabelText('Hotel master')
+          .map((el) => (el as HTMLInputElement).value);
+        expect(values.filter((value) => value === 'Alpha Stay')).toHaveLength(1);
+        expect(values).toContain('');
+      },
+      { timeout: 10000 },
+    );
+  }, 20000);
+
+  it('auto-saves a newly created quotation only after defaults are ready', async () => {
+    const grand = hotelMaster({
+      id: 'aaaaaa77-7777-4777-8777-777777777777',
+      name: 'Grand Singapore',
+      isDefaultForCity: true,
+    });
+    // A version without any persisted section details enables the initial
+    // auto-save; the snapshot must wait for the hotel prefill pool and then
+    // contain the resolved default (never an empty hotel state).
+    const fetchMock = masterFetch(blankCityQuotation({ addOnDetails: null }), {
+      '/masters/hotels': page([grand]),
+      '/masters/destinations': page([
+        destinationMaster([{ id: 'city-sg', name: 'Singapore' }]),
+      ]),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderBuilderPage();
+    const patchCall = await waitFor(
+      () => {
+        const call = fetchMock.mock.calls.find(
+          ([input, options]) =>
+            String(input).includes('/quotations/') &&
+            (options as RequestInit)?.method === 'PATCH' &&
+            String((options as RequestInit)?.body ?? '').includes('Grand Singapore'),
+        );
+        expect(call).toBeDefined();
+        return call!;
+      },
+      { timeout: 15000 },
+    );
+    expect(String((patchCall[1] as RequestInit)?.body ?? '')).toContain('Grand Singapore');
+  }, 30000);
 });
 
 

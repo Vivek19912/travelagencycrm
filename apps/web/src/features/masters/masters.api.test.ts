@@ -1,10 +1,14 @@
 import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  fetchAllMasterPages,
   masterImageFingerprint,
   refreshMasterImageQueries,
   type MasterImageMeta,
 } from './masters.api';
+import { apiClient } from '@/api/client';
+
+vi.mock('@/api/client', () => ({ apiClient: { get: vi.fn() } }));
 
 const image = (id: string, fileName = 'image.png', isPrimary = true): MasterImageMeta => ({
   id,
@@ -12,6 +16,55 @@ const image = (id: string, fileName = 'image.png', isPrimary = true): MasterImag
   mimeType: 'image/png',
   fileSize: 100,
   isPrimary,
+});
+
+describe('fetchAllMasterPages — complete destination-scoped retrieval', () => {
+  it('pages through the full filtered result and dedupes overlapping rows by id', async () => {
+    const get = vi.mocked(apiClient.get);
+    get.mockReset();
+    get.mockImplementation(async (url: string) => {
+      const page = Number(new URL(url, 'http://localhost').searchParams.get('page'));
+      if (page === 1)
+        return {
+          data: [{ id: 'a' }, { id: 'b' }],
+          pagination: { page: 1, pageSize: 100, total: 3, totalPages: 2 },
+        };
+      return {
+        data: [{ id: 'b' }, { id: 'c' }],
+        pagination: { page: 2, pageSize: 100, total: 3, totalPages: 2 },
+      };
+    });
+    const result = await fetchAllMasterPages<{ id: string }>(
+      '/masters/hotels',
+      new URLSearchParams({ status: 'ACTIVE', destinationId: 'dest-1' }),
+    );
+    // Overlapping row `b` is kept once; the default on page 2 is retrieved.
+    expect(result.data.map((row) => row.id)).toEqual(['a', 'b', 'c']);
+    // Every request reuses the same destination-scoped filters at the max page size.
+    expect(get).toHaveBeenCalledTimes(2);
+    for (const [url] of get.mock.calls) {
+      expect(String(url)).toContain('status=ACTIVE');
+      expect(String(url)).toContain('destinationId=dest-1');
+      expect(String(url)).toContain('pageSize=100');
+    }
+  });
+
+  it('rejects when any page fails instead of returning a partial result', async () => {
+    const get = vi.mocked(apiClient.get);
+    get.mockReset();
+    get.mockImplementation(async (url: string) => {
+      const page = Number(new URL(url, 'http://localhost').searchParams.get('page'));
+      if (page === 1)
+        return {
+          data: [{ id: 'a' }],
+          pagination: { page: 1, pageSize: 100, total: 2, totalPages: 2 },
+        };
+      throw new Error('page 2 failed');
+    });
+    await expect(
+      fetchAllMasterPages<{ id: string }>('/masters/hotels', new URLSearchParams()),
+    ).rejects.toThrow('page 2 failed');
+  });
 });
 
 describe('Master image query synchronization', () => {

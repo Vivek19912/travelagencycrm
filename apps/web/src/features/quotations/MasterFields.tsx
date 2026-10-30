@@ -7,8 +7,8 @@ import {
   useAirlines,
   useCruise,
   useCruises,
+  useAllHotels,
   useHotel,
-  useHotels,
   useSightseeingList,
   useVehicles,
   type MasterImageMeta,
@@ -110,7 +110,7 @@ export function HotelMasterFields({
   onChange,
   onMasterSelect,
 }: HotelMasterFieldsProps) {
-  const hotels = useHotels(ACTIVE());
+  const hotels = useAllHotels(ACTIVE());
   const detail = useHotel(value.hotelId ?? undefined);
 
   const hotelOptions = useMemo<MasterOption[]>(() => {

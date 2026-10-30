@@ -85,12 +85,13 @@ import {
   hotelImageUrl,
   useAddOnServices,
   useAirlines,
+  useAllDestinations,
   useCreateAirline,
   useCruise,
   useCruises,
-  useDestinations,
   useHotel,
   useHotels,
+  useHotelsForDestinations,
   useSightseeingList,
   useVehicles,
   vehicleImageUrl,
@@ -1697,8 +1698,11 @@ const emptyHotel = (
  * previous stay — no hotel, no city, no dates, no rooms, no master links and no
  * image references. Used by "Add Hotel Before" / "Add Hotel After".
  */
-const createEmptyHotelStay = (sequence: number, selected = true): HotelInputRow =>
-  emptyHotel(sequence, selected);
+const createEmptyHotelStay = (
+  sequence: number,
+  selected = true,
+  seed: Partial<HotelInputRow> = {},
+): HotelInputRow => emptyHotel(sequence, selected, seed);
 
 /** True when a quotation hotel row's city matches a Hotel Master's city or destination. */
 type DefaultHotelMaster = {
@@ -1715,7 +1719,7 @@ type DefaultHotelMaster = {
 /**
  * Minimal Destination Master shape needed to resolve an itinerary city to the
  * parent destination's stable id. Each destination embeds its linked cities, so
- * the index can be built from the already-loaded `useDestinations` feed without
+ * the index can be built from the already-loaded `useAllDestinations` feed without
  * a new API surface.
  */
 export interface HotelDestinationSource {
@@ -1736,12 +1740,15 @@ export interface HotelDestinationSource {
 export interface HotelDestinationIndex {
   /** normalized city name → destination ids that link that city (stable ids) */
   destinationIdsByCity: Map<string, string[]>;
+  /** normalized destination name → stable destination id */
+  destinationIdByName: Map<string, string>;
 }
 
 export function buildHotelDestinationIndex(
   destinations: HotelDestinationSource[] | null | undefined,
 ): HotelDestinationIndex {
   const destinationIdsByCity = new Map<string, string[]>();
+  const destinationIdByName = new Map<string, string>();
   const add = (key: string, destinationId: string) => {
     if (!key) return;
     const existing = destinationIdsByCity.get(key);
@@ -1749,12 +1756,65 @@ export function buildHotelDestinationIndex(
     else if (!existing.includes(destinationId)) existing.push(destinationId);
   };
   for (const destination of destinations ?? []) {
+    const name = (destination.name ?? '').trim().toLowerCase();
+    if (name && !destinationIdByName.has(name)) destinationIdByName.set(name, destination.id);
     for (const link of destination.cities ?? []) {
-      const name = link?.city?.name;
-      if (name) add(name.trim().toLowerCase(), destination.id);
+      const cityName = link?.city?.name;
+      if (cityName) add(cityName.trim().toLowerCase(), destination.id);
     }
   }
-  return { destinationIdsByCity };
+  return { destinationIdsByCity, destinationIdByName };
+}
+
+/**
+ * The city a lead itinerary stay should be matched against. New leads no
+ * longer collect a city, so `destination` (the city slot) is often blank while
+ * `country` holds the selected Destination Master. Falling back to the
+ * destination keeps such a stay hotel-worthy and lets the destination default
+ * resolve through the relationship index.
+ */
+export function resolveItineraryStayCity(stay: {
+  destination?: string | null;
+  country?: string | null;
+} | null | undefined): string {
+  return (stay?.destination ?? '').trim() || (stay?.country ?? '').trim();
+}
+
+/**
+ * Every Destination Master id referenced by the quotation — by itinerary city,
+ * itinerary destination name, current hotel-row city or destination summary.
+ * Used to scope default-hotel queries to what the quotation actually needs.
+ */
+export function collectHotelDestinationIds({
+  index,
+  itinerary = [],
+  hotelCities = [],
+  destinationSummary,
+}: {
+  index: HotelDestinationIndex;
+  itinerary?: Array<{ destination?: string | null; country?: string | null; nights?: number | null } | null> | null;
+  hotelCities?: Array<string | null | undefined> | null;
+  destinationSummary?: string | null;
+}): string[] {
+  const ids = new Set<string>();
+  const addName = (raw: string | null | undefined) => {
+    const key = (raw ?? '').trim().toLowerCase();
+    if (!key) return;
+    for (const id of index.destinationIdsByCity.get(key) ?? []) ids.add(id);
+    const byName = index.destinationIdByName.get(key);
+    if (byName) ids.add(byName);
+  };
+  for (const stay of itinerary ?? []) {
+    if (stay && typeof stay.nights === 'number' && stay.nights <= 0) continue;
+    addName(resolveItineraryStayCity(stay));
+    addName(stay?.country);
+  }
+  for (const city of hotelCities ?? []) addName(city);
+  const summary = (destinationSummary ?? '').trim();
+  if (summary) {
+    for (const part of summary.split(/[•,>/→|-]+/)) addName(part);
+  }
+  return [...ids].sort();
 }
 
 /** Segments that do not require hotel accommodation. */
@@ -1858,12 +1918,52 @@ export function matchDefaultHotels(
 }
 
 /**
- * Automatic default-hotel prefill applies to brand-new quotations only.
- * Saved snapshots are never rewritten: editing, reopening or loading an
- * existing quotation must not inject newly-marked defaults.
+ * Row-level prefill eligibility. A stay is genuinely empty only when it has no
+ * master link, no typed hotel name, no room/meal selection and no manually
+ * entered money. This replaces the old whole-quotation `savedHotelCount === 0`
+ * gate: an existing quotation may receive a default in a newly added (or still
+ * empty) stay, while selected, manually entered, template-imported, duplicated
+ * and saved rows are never touched.
  */
-export function shouldAutoPrefillHotels(savedHotelCount: number): boolean {
-  return savedHotelCount === 0;
+export function isHotelRowEmpty(row: Partial<HotelInputRow> | null | undefined): boolean {
+  if (!row) return false;
+  if (row.hotelId) return false;
+  if ((row.hotelName ?? '').trim()) return false;
+  if (row.hotelRoomTypeId || row.hotelMealPlanId) return false;
+  if ((row.roomType ?? '').trim() || (row.mealPlan ?? '').trim()) return false;
+  if (Number(row.internalCost ?? 0) > 0 || Number(row.sellingPrice ?? 0) > 0) return false;
+  const lineHasData = (
+    lines: Array<{
+      roomType?: string | null;
+      mealPlan?: string | null;
+      roomTypeId?: string | null;
+      mealPlanId?: string | null;
+      internalCost?: number | null;
+      sellingPrice?: number | null;
+    }> | null | undefined,
+  ) =>
+    (lines ?? []).some(
+      (line) =>
+        Boolean(line) &&
+        (Boolean((line!.roomType ?? '').trim()) ||
+          Boolean((line!.mealPlan ?? '').trim()) ||
+          Boolean(line!.roomTypeId) ||
+          Boolean(line!.mealPlanId) ||
+          Number(line!.internalCost ?? 0) > 0 ||
+          Number(line!.sellingPrice ?? 0) > 0),
+    );
+  return !lineHasData(row.roomLines as never) && !lineHasData(row.mealPlanLines as never);
+}
+
+/**
+ * The city context to use for an empty stay: its own city when known, else the
+ * current itinerary/destination context (never a stale saved summary).
+ */
+export function resolveHotelRowCity(
+  row: { city?: string | null | undefined } | null | undefined,
+  fallbackCity: string | null | undefined,
+): string {
+  return (row?.city ?? '').trim() || (fallbackCity ?? '').trim();
 }
 
 /**
@@ -1922,6 +2022,13 @@ function mapRowToDefaultHotel(
 ): HotelInputRow {
   const cityName = (row.city ?? '').trim();
   const images = masterGallerySnapshot(selected?.images, selected?.name ?? 'Hotel');
+  // Use the same date-aware master rate as a manual master selection
+  // (season → base price). A master without a rate never invents a price and a
+  // figure the user already typed is preserved.
+  const rate = selected ? hotelRateForDate(selected as never, row.checkInDate) : null;
+  const currentSelling = Number(row.sellingPrice ?? 0);
+  const sellingPrice =
+    rate != null && Number(rate) > 0 && !(currentSelling > 0) ? Number(rate) : currentSelling;
   return {
     ...row,
     hotelId: selected?.id ?? null,
@@ -1933,6 +2040,7 @@ function mapRowToDefaultHotel(
     images,
     imageSnapshotPresent: masterGalleryPresence(selected),
     pdfImageUrl: images[0] ? quotationSnapshotImageIdentity(images[0]) : null,
+    sellingPrice,
   };
 }
 
@@ -2516,8 +2624,8 @@ export function QuotationBuilderPage() {
   const cruiseMasters = useCruises(
     useMemo(() => new URLSearchParams({ status: 'ACTIVE', pageSize: '100' }), []),
   );
-  const destinationMasters = useDestinations(
-    useMemo(() => new URLSearchParams({ status: 'ACTIVE', pageSize: '100' }), []),
+  const destinationMasters = useAllDestinations(
+    useMemo(() => new URLSearchParams({ status: 'ACTIVE' }), []),
   );
   // City → destination stable-id index used to resolve an itinerary city to the
   // parent destination whose default hotels should prefill (see
@@ -2992,6 +3100,58 @@ export function QuotationBuilderPage() {
     }
     return ids;
   }, [destinationIdSet, destinationMasters.data?.data, watchedFormItinerary, watchedFormHotels, watchedDestinationSummary]);
+  // Destinations whose hotels can apply to this quotation: resolved from the
+  // lead itinerary, the currently edited itinerary, the live hotel rows and the
+  // destination summary. Stable ids (not names) scope every default query.
+  const hotelDestinationIds = useMemo(
+    () =>
+      collectHotelDestinationIds({
+        index: hotelDestinationIndex,
+        itinerary: [
+          ...(quotation.data?.query?.itinerary ?? []),
+          ...(((watchedFormItinerary ?? []) as Array<Record<string, unknown>>) ?? []).map((row) => ({
+            destination: String((row as { destination?: unknown })?.destination ?? ''),
+            country: String((row as { country?: unknown })?.country ?? ''),
+            nights: null,
+          })),
+        ],
+        hotelCities: ((watchedFormHotels ?? []) as Array<Record<string, unknown>>).map((row) =>
+          String((row as { city?: unknown })?.city ?? ''),
+        ),
+        destinationSummary: String(watchedDestinationSummary ?? ''),
+      }),
+    [
+      hotelDestinationIndex,
+      quotation.data?.query?.itinerary,
+      watchedFormItinerary,
+      watchedFormHotels,
+      watchedDestinationSummary,
+    ],
+  );
+  // Complete, destination-scoped hotel pool (all ACTIVE hotels of the relevant
+  // destinations, every page). Defaults are resolved from this pool instead of
+  // the first 100 newest hotels, so a default beyond that window still applies.
+  const hotelPrefillPool = useHotelsForDestinations(hotelDestinationIds);
+  // Stabilise the pool reference: `combine` builds a fresh array, so key the
+  // memo on the sorted id signature — identical content keeps the same array
+  // reference and the init `form.reset` effect does not loop.
+  const hotelPoolSignature = useMemo(
+    () => hotelPrefillPool.data.map((hotel) => hotel.id).join('|'),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [hotelPrefillPool.data.map((hotel) => hotel.id).join('|')],
+  );
+  const hotelDestinationSignature = hotelDestinationIds.join('|');
+  // Until a destination can be resolved there is nothing to scope a query by;
+  // fall back to the legacy paged feed so a city-only quotation still prefills.
+  const hotelPrefillMasters = useMemo<DefaultHotelMaster[]>(
+    () =>
+      hotelDestinationIds.length
+        ? (hotelPrefillPool.data as unknown as DefaultHotelMaster[])
+        : ((hotelMasters.data?.data ?? []) as unknown as DefaultHotelMaster[]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [hotelDestinationSignature, hotelPoolSignature, hotelMasters.data?.data],
+  );
+  const hotelPrefillReady = hotelDestinationIds.length === 0 || !hotelPrefillPool.isPending;
   // Per-destination vehicle masters for auto-prefill: for each quotation destination ID,
   // fetch ACTIVE vehicles linked to that destination via the backend's destinationId filter.
   // Uses the actual Vehicle Master destination link (vehicle → many destinations).
@@ -3406,47 +3566,47 @@ export function QuotationBuilderPage() {
     // Build hotel stay rows from the lead itinerary.  Non-hotel segments
     // (Cruise, Airport, Transfer, etc.) are excluded.  Consecutive same-city
     // segments are merged into a single continuous stay.
-    let stayCursor = startStr ? new Date(startStr) : null;
     const rawStays = (quotation.data?.query?.itinerary ?? []).filter(
-      (stay) => stay.nights > 0 && isHotelStay(stay.destination),
+      (stay) => stay.nights > 0 && isHotelStay(resolveItineraryStayCity(stay)),
     );
     const mergedStays: typeof rawStays = [];
     for (const stay of rawStays) {
       const prev = mergedStays[mergedStays.length - 1];
-      if (prev && prev.destination.trim().toLowerCase() === stay.destination.trim().toLowerCase()) {
+      const stayCity = resolveItineraryStayCity(stay).trim().toLowerCase();
+      if (prev && resolveItineraryStayCity(prev).trim().toLowerCase() === stayCity) {
         prev.nights += stay.nights;
       } else {
         mergedStays.push({ ...stay });
       }
     }
-    // Initial hotel stays: only the first stay is created; additional date blocks must be added
-    // explicitly via "Add Section" / "Add Stay". This prevents automatic creation of multiple
-    // hotel sections when the itinerary has several cities/dates.
+    // Initial hotel stays: one row per merged hotel-worthy stay, so every
+    // destination in a multi-city itinerary gets its own stay (previously only
+    // the first stay was materialised). Consecutive same-city segments were
+    // merged above. A blank lead city still resolves through the destination
+    // (`country`) so the destination default can apply.
     // When the itinerary produces exactly one hotel city (even when it
     // appears multiple times interrupted by Cruise etc.), that single
     // Hotel Stay must cover the quotation's complete total nights, not
     // only the land-segment nights.
     const itineraryHotelRows: HotelInputRow[] = (() => {
-      const firstStay = mergedStays[0];
-      if (!firstStay) return [];
-      const stay = firstStay;
-      const index = 0;
-      const isSingleHotelCity = mergedStays.length === 1 && leadTotalNights > (stay.nights ?? 0);
-      const nightsForStay = isSingleHotelCity ? leadTotalNights : (stay.nights ?? 0);
-      const checkIn = stay.arrivalDate ? new Date(stay.arrivalDate) : stayCursor;
-      const derivedCheckOut = checkIn ? new Date(checkIn) : null;
-      if (derivedCheckOut) derivedCheckOut.setDate(derivedCheckOut.getDate() + nightsForStay);
-      const checkOut = stay.departureDate ? new Date(stay.departureDate) : derivedCheckOut;
-      if (checkOut) stayCursor = new Date(checkOut);
-      return [
-        emptyHotel(index + 1, true, {
-          city: stay.destination,
+      if (!mergedStays.length) return [];
+      let cursor = startStr ? new Date(startStr) : null;
+      const isSingleHotelCity = mergedStays.length === 1 && leadTotalNights > (mergedStays[0]?.nights ?? 0);
+      return mergedStays.map((stay, index) => {
+        const nightsForStay = isSingleHotelCity ? leadTotalNights : (stay.nights ?? 0);
+        const checkIn = stay.arrivalDate ? new Date(stay.arrivalDate) : cursor;
+        const derivedCheckOut = checkIn ? new Date(checkIn) : null;
+        if (derivedCheckOut) derivedCheckOut.setDate(derivedCheckOut.getDate() + nightsForStay);
+        const checkOut = stay.departureDate ? new Date(stay.departureDate) : derivedCheckOut;
+        if (checkOut) cursor = new Date(checkOut);
+        return emptyHotel(index + 1, true, {
+          city: resolveItineraryStayCity(stay),
           // No rooms seeding (see createHotelRow): unassigned stays stay empty.
           nights: nightsForStay,
           checkInDate: checkIn ? new Date(checkIn) : null,
           checkOutDate: checkOut,
-        }),
-      ];
+        });
+      });
     })();
     const fallbackNights =
       startStr && endStr
@@ -3545,6 +3705,85 @@ export function QuotationBuilderPage() {
       },
     };
     vehicleDescriptionOverriddenRef.current.clear();
+    // Saved hotel rows are normalised exactly as before; only genuinely empty
+    // rows are eligible for a default. Selected/saved/template/duplicated rows
+    // (any master id or typed hotel information) are never touched. A brand-new
+    // quotation keeps the established multi-default expansion.
+    const initialSavedHotelRows: HotelInputRow[] = version.hotels.map((row, index) => {
+      const matchingStay =
+        leadHotelRows.find(
+          (stay) =>
+            (stay.city ?? '').trim().toLowerCase() === (row.city ?? '').trim().toLowerCase(),
+        ) ?? leadHotelRows[index];
+      return withSynthesizedLines({
+        ...row,
+        checkInDate: row.checkInDate
+          ? new Date(row.checkInDate)
+          : (matchingStay?.checkInDate ?? (startStr ? new Date(startStr) : null)),
+        checkOutDate: row.checkOutDate
+          ? new Date(row.checkOutDate)
+          : (matchingStay?.checkOutDate ??
+            (returnStr ? new Date(returnStr) : endStr ? new Date(endStr) : null)),
+        showCheckInTime: Boolean(row.checkInTime?.trim()),
+        showCheckOutTime: Boolean(row.checkOutTime?.trim()),
+        internalCost: row.internalCost ? Number(row.internalCost) : 0,
+        sellingPrice: row.sellingPrice ? Number(row.sellingPrice) : 0,
+        // Backward compatibility: older quotations stored the bookmark
+        // gallery at section level (hotelDetails.images). Migrate it onto
+        // the single hotel stay so the per-stay image manager and PDF
+        // selection keep working. Rows that already carry their own
+        // images (newer saves) are left untouched.
+        images: (row.imageSnapshotPresent
+          ? (row.images ?? [])
+          : version.hotels.length === 1 &&
+              Array.isArray(version.hotelDetails?.images) &&
+              version.hotelDetails.images.length > 0
+            ? version.hotelDetails.images.map((image) => ({
+                url: image.url,
+                thumbnailUrl: null,
+                alt: image.alt ?? null,
+              }))
+            : (row.images ?? [])) as NonNullable<
+          QuotationVersionInput['hotels']
+        >[number]['images'],
+        imageSnapshotPresent:
+          (row.imageSnapshotPresent ?? Boolean(row.images?.length)) ||
+          (version.hotels.length === 1 &&
+            Array.isArray(version.hotelDetails?.images) &&
+            version.hotelDetails.images.length > 0),
+        pdfImageUrl:
+          row.pdfImageUrl ??
+          (version.hotels.length === 1 ? (version.hotelDetails?.pdfImageUrl ?? null) : null),
+      } as unknown as HotelInputRow);
+    });
+    const initialHotelRows: HotelInputRow[] = initialSavedHotelRows.length
+      ? (() => {
+          const fallbackCity = leadHotelRows[0]?.city ?? '';
+          const presentHotelIds = new Set(
+            initialSavedHotelRows
+              .map((row) => row.hotelId)
+              .filter((id): id is string => Boolean(id)),
+          );
+          return initialSavedHotelRows.map((row) => {
+            if (!isHotelRowEmpty(row)) return row;
+            const city = resolveHotelRowCity(row, fallbackCity);
+            // Exactly one default per saved empty row, never one already used by
+            // another stay (duplicate rows are worse than an empty stay).
+            const defaultHotel = matchDefaultHotels(
+              city,
+              hotelPrefillMasters,
+              hotelDestinationIndex,
+            ).find((hotel) => !presentHotelIds.has(hotel.id));
+            if (!defaultHotel) return row;
+            presentHotelIds.add(defaultHotel.id);
+            return mapRowToDefaultHotel({ ...row, city }, defaultHotel);
+          });
+        })()
+      : expandDefaultHotelRows(
+          leadHotelRows,
+          hotelPrefillMasters,
+          hotelDestinationIndex,
+        ).map(withSynthesizedLines);
     const legacyTitle = version.title.trim().toLowerCase();
     const legacyDestinationTitle =
       `${version.destinationSummary.trim()} travel proposal`.toLowerCase();
@@ -3731,61 +3970,7 @@ export function QuotationBuilderPage() {
         ...row,
         date: row.date ? new Date(row.date) : null,
       })),
-      hotels: !shouldAutoPrefillHotels(version.hotels.length)
-        ? version.hotels.map((row, index) => {
-            const matchingStay =
-              leadHotelRows.find(
-                (stay) =>
-                  (stay.city ?? '').trim().toLowerCase() === (row.city ?? '').trim().toLowerCase(),
-              ) ?? leadHotelRows[index];
-            return withSynthesizedLines({
-              ...row,
-              checkInDate: row.checkInDate
-                ? new Date(row.checkInDate)
-                : (matchingStay?.checkInDate ?? (startStr ? new Date(startStr) : null)),
-              checkOutDate: row.checkOutDate
-                ? new Date(row.checkOutDate)
-                : (matchingStay?.checkOutDate ??
-                  (returnStr ? new Date(returnStr) : endStr ? new Date(endStr) : null)),
-              showCheckInTime: Boolean(row.checkInTime?.trim()),
-              showCheckOutTime: Boolean(row.checkOutTime?.trim()),
-              internalCost: row.internalCost ? Number(row.internalCost) : 0,
-              sellingPrice: row.sellingPrice ? Number(row.sellingPrice) : 0,
-              // Backward compatibility: older quotations stored the bookmark
-              // gallery at section level (hotelDetails.images). Migrate it onto
-              // the single hotel stay so the per-stay image manager and PDF
-              // selection keep working. Rows that already carry their own
-              // images (newer saves) are left untouched.
-              images: (row.imageSnapshotPresent
-                ? (row.images ?? [])
-                : version.hotels.length === 1 &&
-                    Array.isArray(version.hotelDetails?.images) &&
-                    version.hotelDetails.images.length > 0
-                  ? version.hotelDetails.images.map((image) => ({
-                      url: image.url,
-                      thumbnailUrl: null,
-                      alt: image.alt ?? null,
-                    }))
-                  : (row.images ?? [])) as NonNullable<
-                QuotationVersionInput['hotels']
-              >[number]['images'],
-              imageSnapshotPresent:
-                (row.imageSnapshotPresent ?? Boolean(row.images?.length)) ||
-                (version.hotels.length === 1 &&
-                  Array.isArray(version.hotelDetails?.images) &&
-                  version.hotelDetails.images.length > 0),
-              pdfImageUrl:
-                row.pdfImageUrl ??
-                (version.hotels.length === 1 ? (version.hotelDetails?.pdfImageUrl ?? null) : null),
-            } as unknown as HotelInputRow);
-          })
-        : expandDefaultHotelRows(
-            leadHotelRows,
-            hotelMasters.data?.data ?? [],
-            hotelDestinationIndex,
-          ).map(
-            withSynthesizedLines,
-          ),
+      hotels: initialHotelRows,
       services: version.services.map((row) => {
         const base = {
           serviceType: row.serviceType as ServiceType,
@@ -3857,13 +4042,11 @@ export function QuotationBuilderPage() {
           ).destinationExpertConfig as QuotationVersionInput['destinationExpertConfig'])
         : null,
     }, { keepDirtyValues: true });
-    // A brand-new quotation with a prefilled default hotel keeps the Hotel
+    // A quotation with prefilled/default/selected hotel rows keeps the Hotel
     // section included unless the user explicitly turned it off. A saved
     // quotation's `hotelDetails.include` is authoritative (an explicitly
     // excluded hotel stays excluded).
-    const prefilledHotelRows = shouldAutoPrefillHotels(version.hotels.length)
-      ? expandDefaultHotelRows(leadHotelRows, hotelMasters.data?.data ?? [], hotelDestinationIndex)
-      : [];
+    const prefilledHotelRows = initialHotelRows;
     const savedHotelInclude = version.hotelDetails?.include ?? true;
     if (savedHotelInclude && !autoHotelRef.current.userToggledHotel) {
       if (prefilledHotelRows.some((row) => row.hotelId) || version.hotels.length > 0) {
@@ -3921,7 +4104,7 @@ export function QuotationBuilderPage() {
     form,
     quotation.data,
     sightseeingMasters.data,
-    hotelMasters.data,
+    hotelPrefillMasters,
     destinationMasters.data,
     hotelDestinationIndex,
     leadRequested,
@@ -4142,28 +4325,64 @@ export function QuotationBuilderPage() {
   const setServicePdfImage = (serviceIndex: number, identity: string) =>
     form.setValue(`services.${serviceIndex}.pdfImageUrl`, identity, { shouldDirty: true });
 
-  // Prefill default hotels for untouched hotel rows that appear after
-  // initialization (e.g. "Add Hotel" for a newly added destination), without
-  // ever touching a row the user has selected or edited. Every default hotel
-  // of the destination gets its own stay; rows already carrying one are left
-  // alone so hotels are never duplicated.
+  // Prefill default hotels for genuinely empty rows after initialization:
+  // newly added stays ("Add Hotel", before/after, option) and saved empty rows
+  // in an existing quotation. Rows with a master link, typed hotel information
+  // or manual money are never touched, so saved/template/duplicated selections
+  // and prices survive. Re-runs skip filled rows, so defaults are never
+  // duplicated.
   useEffect(() => {
     const state = autoHotelRef.current;
-    if (state.userToggledHotel) return;
-    if (!hotelMasters.data) return;
-    // Automatic prefill only applies to brand-new quotations; saved snapshots
-    // are never rewritten.
-    if (!shouldAutoPrefillHotels(version?.hotels?.length ?? 0)) return;
-    const rows = watchedHotels ?? [];
-    const masters = hotelMasters.data?.data ?? [];
-    let matched = false;
+    // Only an explicitly excluded Hotel section blocks population. Manually
+    // enabling the section (which used to set `userToggledHotel`) no longer
+    // prevents a new empty stay from receiving its default.
+    if (excluded.hotel) return;
+    if (!hotelPrefillReady) return;
+    const masters = hotelPrefillMasters;
+    if (!masters.length) return;
+    const rows = (watchedHotels ?? []) as HotelInputRow[];
+    const formItinerary = (watchedFormItinerary ?? []) as Array<Record<string, unknown>>;
+    // Current edited itinerary first, then the lead, then any existing row and
+    // finally the live destination summary. Never the saved summary alone.
+    const resolvesInIndex = (city: string) => {
+      const key = city.trim().toLowerCase();
+      if (!key) return false;
+      return (
+        hotelDestinationIndex.destinationIdsByCity.has(key) ||
+        hotelDestinationIndex.destinationIdByName.has(key)
+      );
+    };
+    const fallbackCity = (() => {
+      for (const itineraryRow of formItinerary) {
+        for (const raw of [itineraryRow.destination, itineraryRow.overnightLocation]) {
+          const city = String(raw ?? '').trim();
+          if (city && isHotelStay(city) && resolvesInIndex(city)) return city;
+        }
+      }
+      for (const stay of quotation.data?.query?.itinerary ?? []) {
+        const city = resolveItineraryStayCity(stay);
+        if (city && isHotelStay(city)) return city;
+      }
+      const rowCity = rows.map((row) => (row.city ?? '').trim()).find(Boolean);
+      if (rowCity) return rowCity;
+      return (
+        String(watchedDestinationSummary ?? '')
+          .split(/[•(→>,]/)[0]
+          ?.trim() ?? ''
+      );
+    })();
+    // The established multi-default behaviour only applies to a brand-new
+    // quotation built from the lead. An existing quotation gets exactly one
+    // default per empty stay.
+    const brandNew = (version?.hotels?.length ?? 0) === 0;
     let nextSequence = hotels.fields.length + 1;
     const presentHotelIds = new Set(
       rows.map((row) => row.hotelId).filter((id): id is string => Boolean(id)),
     );
-    const fillRowWithDefault = (index: number, row: HotelInputRow, defaultHotel: DefaultHotelMaster) => {
+    let matched = false;
+    const fillRowWithDefault = (index: number, defaultHotel: DefaultHotelMaster) => {
       const images = masterGallerySnapshot(defaultHotel.images, defaultHotel.name);
-      const matchedRate = hotelRateForDate(defaultHotel as never, row.checkInDate);
+      const matchedRate = hotelRateForDate(defaultHotel as never, rows[index]?.checkInDate);
       const price = matchedRate != null && Number(matchedRate) > 0 ? Number(matchedRate) : null;
       // Same mapping as a manual master selection (see HotelMasterFields).
       for (const [key, patchValue] of Object.entries({
@@ -4184,45 +4403,39 @@ export function QuotationBuilderPage() {
       }
       if (price != null) {
         const sectionAmount = form.getValues('hotelDetails.amount' as never) as unknown;
-        const sectionEmpty = sectionAmount == null || sectionAmount === '' || Number(sectionAmount) === 0;
+        const sectionEmpty =
+          sectionAmount == null || sectionAmount === '' || Number(sectionAmount) === 0;
         if (sectionEmpty)
           form.setValue('hotelDetails.amount', price as never, { shouldDirty: true });
       }
       presentHotelIds.add(defaultHotel.id);
     };
     rows.forEach((row, index) => {
-      if (row.hotelId || row.hotelName?.trim()) return;
-      const cityName = (row.city ?? '').trim();
+      if (!isHotelRowEmpty(row)) return;
+      const cityName = resolveHotelRowCity(row, fallbackCity);
       if (!cityName) return;
-      const defaults = matchDefaultHotels(cityName, masters, hotelDestinationIndex);
+      const defaults = matchDefaultHotels(cityName, masters, hotelDestinationIndex).filter(
+        (hotel) => !presentHotelIds.has(hotel.id),
+      );
       if (!defaults.length) return;
-      // A default hotel for this destination already exists → no duplicates.
-      if (defaults.some((hotel) => presentHotelIds.has(hotel.id))) return;
       matched = true;
-      fillRowWithDefault(index, row, defaults[0]!);
+      // The builder row itself is filled in place; this keeps its id, room
+      // allocation state and dates.
+      if (!(row.city ?? '').trim())
+        form.setValue(`hotels.${index}.city`, cityName, { shouldDirty: true });
+      fillRowWithDefault(index, defaults[0]!);
+      if (!brandNew) return;
       // Remaining defaults become their own stays cloned from this row's
-      // dates/nights/rooms. They arrive pre-filled, so re-runs skip them.
+      // dates/nights/rooms (multi-default behaviour for new quotations).
       for (const hotel of defaults.slice(1)) {
         if (presentHotelIds.has(hotel.id)) continue;
-        presentHotelIds.add(hotel.id);
-        const images = masterGallerySnapshot(hotel.images, hotel.name);
-        const matchedRate = hotelRateForDate(hotel as never, row.checkInDate);
-        const price = matchedRate != null && Number(matchedRate) > 0 ? Number(matchedRate) : null;
         hotels.append({
-          ...row,
-          hotelId: hotel.id,
-          hotelRoomTypeId: null,
-          hotelMealPlanId: null,
-          hotelName: hotel.name,
+          ...mapRowToDefaultHotel(row, hotel),
           city: hotel.city.name,
-          category: hotel.starCategory ? `${hotel.starCategory} Star` : null,
-          images,
-          imageSnapshotPresent: masterGalleryPresence(hotel),
-          pdfImageUrl: images[0] ? quotationSnapshotImageIdentity(images[0]) : null,
-          ...(price != null ? { sellingPrice: price } : {}),
           sequence: nextSequence++,
           selected: true,
         });
+        presentHotelIds.add(hotel.id);
       }
     });
     if (matched && !state.enabledByAuto) {
@@ -4230,7 +4443,18 @@ export function QuotationBuilderPage() {
       setExcluded((current) => ({ ...current, hotel: false }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [watchedHotels, hotelMasters.data, hotelDestinationIndex, version, form]);
+  }, [
+    watchedHotels,
+    hotelPrefillReady,
+    hotelPrefillMasters,
+    hotelDestinationIndex,
+    watchedFormItinerary,
+    watchedDestinationSummary,
+    excluded.hotel,
+    quotation.data?.query?.itinerary,
+    version,
+    form,
+  ]);
 
   /**
    * Fill the first empty vehicle row (if any) and append the remaining
@@ -4372,6 +4596,36 @@ export function QuotationBuilderPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version, initializedFormVersionId, destinationMasters.data, vehicleEffectiveDestinationIds, watchedAddOnInclude, form, addonsByDestination]);
 
+  const hotelDefaultCity = useMemo(() => {
+    const resolves = (city: string) => {
+      const key = city.trim().toLowerCase();
+      return Boolean(
+        key &&
+          (hotelDestinationIndex.destinationIdsByCity.has(key) ||
+            hotelDestinationIndex.destinationIdByName.has(key)),
+      );
+    };
+    const fromItinerary = ((watchedFormItinerary ?? []) as Array<Record<string, unknown>>)
+      .flatMap((row) => [row.destination, row.overnightLocation])
+      .map((value) => String(value ?? '').trim())
+      .find((city) => city && isHotelStay(city) && resolves(city));
+    if (fromItinerary) return fromItinerary;
+    for (const stay of quotation.data?.query?.itinerary ?? []) {
+      const city = resolveItineraryStayCity(stay);
+      if (city && isHotelStay(city)) return city;
+    }
+    return (
+      String(watchedDestinationSummary ?? '')
+        .split(/[•(→>,]/)[0]
+        ?.trim() ?? ''
+    );
+  }, [
+    watchedFormItinerary,
+    watchedDestinationSummary,
+    quotation.data?.query?.itinerary,
+    hotelDestinationIndex,
+  ]);
+
   const createHotelRow = (
     sequence: number,
     selected: boolean,
@@ -4390,7 +4644,9 @@ export function QuotationBuilderPage() {
           )
         : null;
     return emptyHotel(sequence, selected, {
-      city: (quotation.data?.destinationSummary ?? '').split(/[•(→>,]/)[0]?.trim() ?? '',
+      // The current edited itinerary wins over the saved quotation summary; the
+      // summary is only the last resort when the builder has no destination yet.
+      city: hotelDefaultCity,
       // No rooms seeding: a newly added stay must not count as one room.
       // Total Rooms stays empty until the user adds room allocations.
       nights: stayNights,
@@ -4404,12 +4660,27 @@ export function QuotationBuilderPage() {
     hotels.append(createHotelRow(hotels.fields.length + 1, selected, seed));
   };
 
+  /**
+   * Add Hotel Before/After: a blank, independent stay that inherits only the
+   * neighbouring stay's destination/city. Inheriting the city lets the default
+   * prefill resolve the right destination; the hotel itself is never cloned.
+   */
+  const neighbourHotelCity = (index: number) =>
+    ((watchedHotels?.[index] as HotelInputRow | undefined)?.city ?? '').trim() ||
+    hotelDefaultCity;
+
   const insertHotelAfter = (index: number) => {
-    hotels.insert(index + 1, createEmptyHotelStay(index + 2));
+    hotels.insert(
+      index + 1,
+      createEmptyHotelStay(index + 2, true, { city: neighbourHotelCity(index) }),
+    );
   };
 
   const insertHotelBefore = (index: number) => {
-    hotels.insert(index, createEmptyHotelStay(index + 1));
+    hotels.insert(
+      index,
+      createEmptyHotelStay(index + 1, true, { city: neighbourHotelCity(index) }),
+    );
   };
 
   const estimate = useMemo(() => {
@@ -4997,7 +5268,12 @@ export function QuotationBuilderPage() {
     // Any explicit toggle is a user choice: automatic prefill from the Lead must
     // never re-enable a section afterwards.
     autoToggleRef.current.add(key);
-    if (key === 'hotel') autoHotelRef.current.userToggledHotel = true;
+    // Only turning Hotel OFF blocks automatic prefill. Turning it ON clears the
+    // block so a newly added empty stay can still receive its default.
+    if (key === 'hotel') {
+      const next = !excluded[key];
+      autoHotelRef.current.userToggledHotel = next;
+    }
     const next = !excluded[key];
     setExcluded((current) => ({ ...current, [key]: next }));
     // Turning Hotel off (`next === true` → excluded) must drop any stale Hotel
@@ -7426,7 +7702,7 @@ export function QuotationBuilderPage() {
         }
         ready={Boolean(
           quotation.data &&
-          hotelMasters.data &&
+          hotelPrefillReady &&
           destinationMasters.data &&
           sightseeingMasters.data &&
           initializedFormVersionId === version.id,

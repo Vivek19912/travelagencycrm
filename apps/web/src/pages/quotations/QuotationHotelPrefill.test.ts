@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  hotelRateForDate,
   buildHotelDestinationIndex,
+  collectHotelDestinationIds,
   expandDefaultHotelRows,
+  isHotelRowEmpty,
   matchDefaultHotels,
-  shouldAutoPrefillHotels,
+  resolveHotelRowCity,
+  resolveItineraryStayCity,
   type HotelInputRow,
 } from './QuotationBuilderPage';
 
@@ -91,11 +95,58 @@ describe('matchDefaultHotels', () => {
   });
 });
 
-describe('shouldAutoPrefillHotels', () => {
-  it('prefills only brand-new quotations, never saved ones', () => {
-    expect(shouldAutoPrefillHotels(0)).toBe(true);
-    expect(shouldAutoPrefillHotels(1)).toBe(false);
-    expect(shouldAutoPrefillHotels(5)).toBe(false);
+describe('isHotelRowEmpty — row-level prefill eligibility', () => {
+  it('an untouched stay is eligible', () => {
+    expect(isHotelRowEmpty(leadRow('Singapore'))).toBe(true);
+  });
+
+  it('selected, typed and priced rows are never eligible', () => {
+    expect(isHotelRowEmpty(leadRow('Singapore', { hotelId: 'h-a' }))).toBe(false);
+    expect(isHotelRowEmpty(leadRow('Singapore', { hotelName: 'Typed Hotel' }))).toBe(false);
+    expect(isHotelRowEmpty(leadRow('Singapore', { hotelRoomTypeId: 'rt-1' }))).toBe(false);
+    expect(isHotelRowEmpty(leadRow('Singapore', { roomType: 'Deluxe' }))).toBe(false);
+    expect(isHotelRowEmpty(leadRow('Singapore', { sellingPrice: 5000 }))).toBe(false);
+    expect(
+      isHotelRowEmpty(
+        leadRow('Singapore', {
+          roomLines: [{ roomType: 'Deluxe', rooms: 1, sellingPrice: 100 }],
+        }),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe('resolveItineraryStayCity / resolveHotelRowCity / collectHotelDestinationIds', () => {
+  it('falls back to the destination when the lead city is blank', () => {
+    expect(
+      resolveItineraryStayCity({ destination: '', country: 'Singapore Heaven Delight' }),
+    ).toBe('Singapore Heaven Delight');
+    expect(resolveItineraryStayCity({ destination: 'Goa', country: 'Goa Region' })).toBe('Goa');
+  });
+
+  it('an empty stay inherits the current itinerary/destination context', () => {
+    expect(resolveHotelRowCity({ city: '' }, 'Singapore')).toBe('Singapore');
+    expect(resolveHotelRowCity({ city: 'Dubai' }, 'Singapore')).toBe('Dubai');
+  });
+
+  it('collects stable destination ids from itinerary, rows and summary', () => {
+    const index = buildHotelDestinationIndex(singaporeDestinations);
+    expect(
+      collectHotelDestinationIds({
+        index,
+        itinerary: [{ destination: '', country: 'Singapore Heaven Delight', nights: 2 }],
+        hotelCities: [],
+        destinationSummary: '',
+      }),
+    ).toEqual([SG_DEST]);
+    expect(
+      collectHotelDestinationIds({
+        index,
+        itinerary: [],
+        hotelCities: ['Dubai'],
+        destinationSummary: '',
+      }),
+    ).toEqual([DUBAI_DEST]);
   });
 });
 
@@ -237,11 +288,13 @@ describe('expandDefaultHotelRows — audit regression', () => {
     expect(rows.map((r) => r.city)).toEqual(['Singapore', 'Singapore', 'Singapore']);
   });
 
-  it('8. prefills only brand-new quotations (saved rows are never rewritten)', () => {
-    // shouldAutoPrefillHotels gates the caller; when false the builder keeps the
-    // saved snapshot untouched (verified here through the guard contract).
-    expect(shouldAutoPrefillHotels(0)).toBe(true);
-    expect(shouldAutoPrefillHotels(1)).toBe(false);
+  it('8. saved rows are preserved by row-level eligibility (existing rows keep snapshots)', () => {
+    // Row-level eligibility gates the caller: non-empty saved rows are never
+    // rewritten, while genuinely empty rows stay eligible for a default.
+    expect(isHotelRowEmpty(leadRow('Singapore'))).toBe(true);
+    expect(isHotelRowEmpty(leadRow('Singapore', { hotelId: 'h-a', hotelName: 'Hotel A' }))).toBe(
+      false,
+    );
   });
 
   it('9. a default already present on a stay is not inserted again', () => {
@@ -271,6 +324,45 @@ describe('expandDefaultHotelRows — audit regression', () => {
     // The first stay expands both defaults; the second same-destination stay
     // maps to a single default and must NOT re-expand both again.
     expect(rows.map((r) => r.hotelId)).toEqual(['h-a', 'h-b', 'h-a']);
+  });
+
+  it('finds a default parked beyond the first 100 records (no 100-row window)', () => {
+    // 150 unrelated non-default hotels ahead of the destination default: a
+    // first-page-only fetch would never see it, but matching over the
+    // destination-scoped pool resolves it.
+    const filler: Master[] = Array.from({ length: 150 }, (_, i) =>
+      master(`filler-${i}`, `Filler Hotel ${i}`, 'Nowhere City', 'Nowhere Land', false),
+    );
+    const target = master(
+      'h-deep',
+      'Deep Default Hotel',
+      'Singapore',
+      'Singapore Heaven Delight',
+      true,
+      'ACTIVE',
+      SG_DEST,
+    );
+    expect(matchDefaultHotels('Singapore', [...filler, target], singaporeIndex)).toEqual([target]);
+    expect(matchDefaultHotels('Sentosa Island', [...filler, target], singaporeIndex)).toEqual([
+      target,
+    ]);
+  });
+
+  it('keeps template/duplicated rows (master-linked with money) ineligible', () => {    expect(
+      isHotelRowEmpty(
+        leadRow('Singapore', { hotelId: 'tpl-1', hotelName: 'Template Hotel', sellingPrice: 8000 }),
+      ),
+    ).toBe(false);
+    expect(
+      isHotelRowEmpty(
+        leadRow('Dubai', {
+          hotelId: 'dup-1',
+          hotelName: 'Duplicated Hotel',
+          roomType: 'Deluxe',
+          sellingPrice: 5000,
+        }),
+      ),
+    ).toBe(false);
   });
 });
 
@@ -369,5 +461,26 @@ describe('expandDefaultHotelRows — legacy behaviour', () => {
     const rows = expandDefaultHotelRows([leadRow('Singapore')], masters);
     expect(rows).toHaveLength(10);
     expect(new Set(rows.map((r) => r.hotelId)).size).toBe(10);
+  });
+});
+
+describe('hotelRateForDate — default price mapping (existing pricing rule)', () => {
+  it('prefers the season rate covering the check-in date, else the base price', () => {
+    const masterWithSeasons = {
+      price: 6000,
+      seasons: [
+        { startDate: '2026-08-01', endDate: '2026-08-31', price: 7500 },
+        { startDate: '2026-12-01', endDate: '2026-12-31', price: 9000 },
+      ],
+    };
+    expect(hotelRateForDate(masterWithSeasons, '2026-08-10')).toBe(7500);
+    expect(hotelRateForDate(masterWithSeasons, new Date('2026-12-15'))).toBe(9000);
+    expect(hotelRateForDate(masterWithSeasons, '2026-10-01')).toBe(6000);
+  });
+
+  it('returns null when the master has no rate, never inventing a price', () => {
+    expect(hotelRateForDate({}, '2026-08-10')).toBeNull();
+    expect(hotelRateForDate({ price: 0 }, '2026-08-10')).toBeNull();
+    expect(hotelRateForDate({ price: null }, '2026-08-10')).toBeNull();
   });
 });
