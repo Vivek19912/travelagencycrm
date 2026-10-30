@@ -68,6 +68,31 @@ let browserPromise: Promise<Browser> | null = null;
 /** Serializes renders so concurrent generations queue instead of overlapping. */
 let renderQueue: Promise<unknown> = Promise.resolve();
 
+/**
+ * Public tokens ride in page URLs (`/q/<token>`), and browser errors echo the
+ * failing URL — so raw automation errors must never reach logs or clients.
+ * Keeps only the first line with any token-looking path segment redacted.
+ */
+export function sanitizeWeblinkPdfError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const firstLine = raw.split('\n')[0] ?? '';
+  return firstLine
+    .replace(/\/q\/[A-Za-z0-9_-]{16,}/g, '/q/[redacted]')
+    .slice(0, 500);
+}
+
+/** Runs one render stage, tagging failures so logs say WHERE it broke. */
+async function renderStage<T>(
+  stage: 'launch' | 'navigate' | 'ready' | 'print',
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    throw new Error(`Weblink PDF failed at stage=${stage}: ${sanitizeWeblinkPdfError(error)}`);
+  }
+}
+
 /** Public quotation PDF-mode URL for a token on the given web base URL. */
 export function buildWeblinkPdfUrl(baseUrl: string, token: string): string {
   return `${baseUrl.replace(/\/$/, '')}/q/${encodeURIComponent(token)}?pdf=weblink`;
@@ -115,13 +140,17 @@ export async function createWeblinkPdfContext(browser: Browser) {
 }
 
 async function renderOnce({ url, timeoutMs = DEFAULT_TIMEOUT_MS }: WeblinkBrowserPdfOptions) {
-  const browser = await getBrowser();
+  const browser = await renderStage('launch', getBrowser);
   const { context, page } = await createWeblinkPdfContext(browser);
   try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+    await renderStage('navigate', () =>
+      page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeoutMs }),
+    );
     // The PDF-mode view renders only after its public data loads; anything
     // else (error card, boot shell) means this token cannot produce a PDF.
-    await page.waitForSelector('main[data-pdf-mode="weblink"]', { timeout: timeoutMs });
+    await renderStage('ready', () =>
+      page.waitForSelector('main[data-pdf-mode="weblink"]', { timeout: timeoutMs }),
+    );
     // Drive lazy-loaded images into view, then settle back at the top. Passed
     // as source strings (not closures): bundlers/transforms must never inject
     // helpers into code evaluated inside the page.
@@ -154,17 +183,19 @@ async function renderOnce({ url, timeoutMs = DEFAULT_TIMEOUT_MS }: WeblinkBrowse
       );
     })()`);
     await page.waitForTimeout(500);
-    return await page.pdf({
-      format: 'A4',
-      printBackground: true,
-      displayHeaderFooter: true,
-      // No website header in the PDF (avoids duplicating the quotation hero);
-      // the discreet page-number footer is the only browser chrome.
-      headerTemplate: '<div></div>',
-      footerTemplate: WEBLINK_PDF_FOOTER_TEMPLATE,
-      margin: { top: '36px', bottom: '72px', left: '32px', right: '32px' },
-      preferCSSPageSize: false,
-    });
+    return await renderStage('print', () =>
+      page.pdf({
+        format: 'A4',
+        printBackground: true,
+        displayHeaderFooter: true,
+        // No website header in the PDF (avoids duplicating the quotation hero);
+        // the discreet page-number footer is the only browser chrome.
+        headerTemplate: '<div></div>',
+        footerTemplate: WEBLINK_PDF_FOOTER_TEMPLATE,
+        margin: { top: '36px', bottom: '72px', left: '32px', right: '32px' },
+        preferCSSPageSize: false,
+      }),
+    );
   } finally {
     await page.close().catch(() => undefined);
     await context.close().catch(() => undefined);

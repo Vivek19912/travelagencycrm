@@ -51,10 +51,7 @@ import { validateMasterRefs, type RetainedMasterRefs } from './master-refs.servi
 import { resolveHotelRoomPricing } from './hotel-pricing-resolver.js';
 import { renderQuotationPdf, type QuotationPdfInput } from './pdf.service.js';
 import { renderStylishQuotationPdf } from './stylish-pdf.service.js';
-import {
-  buildWeblinkPdfUrl,
-  renderWeblinkPdfFromUrl,
-} from './weblink-browser-pdf.service.js';
+import { buildWeblinkPdfUrl, renderWeblinkPdfFromUrl, sanitizeWeblinkPdfError } from './weblink-browser-pdf.service.js';
 import {
   preferredPublicAppBaseUrl,
   friendlyPublicSlugBaseUrl,
@@ -695,14 +692,31 @@ async function presentVersion(version: FullVersion, canViewCosting: boolean, cus
     itinerary: version.itinerary.map(strip),
     hotels: await Promise.all(
       version.hotels.map(async (row) => {
-        const { internalCost, hotelId, hotelRoomTypeId, hotelMealPlanId, baseRoomPrice, extraBedPrice, childWithoutBedPrice, ...hotel } = strip(
-          row as unknown as typeof row & { baseRoomPrice: unknown; extraBedPrice: unknown; childWithoutBedPrice: unknown },
+        const {
+          internalCost,
+          hotelId,
+          hotelRoomTypeId,
+          hotelMealPlanId,
+          baseRoomPrice,
+          extraBedPrice,
+          childWithoutBedPrice,
+          ...hotel
+        } = strip(
+          row as unknown as typeof row & {
+            baseRoomPrice: unknown;
+            extraBedPrice: unknown;
+            childWithoutBedPrice: unknown;
+          },
         );
         // Multi-room lines: master ids are internal editing aids and line costs
         // are internal data — apply the same visibility rules as the row level.
         const presentLines = (lines: unknown, idKey: 'hotelRoomTypeId' | 'hotelMealPlanId') =>
           (Array.isArray(lines) ? lines : []).map((line) => {
-            const { [idKey]: lineId, internalCost: lineCost, ...rest } = line as Record<string, unknown>;
+            const {
+              [idKey]: lineId,
+              internalCost: lineCost,
+              ...rest
+            } = line as Record<string, unknown>;
             void lineId;
             return {
               ...(rest as object),
@@ -718,10 +732,14 @@ async function presentVersion(version: FullVersion, canViewCosting: boolean, cus
           images: await presentQuotationImages((hotel as unknown as { images: unknown }).images),
           imageSnapshotPresent: Array.isArray((hotel as unknown as { images: unknown }).images),
           sellingPrice: decimal(hotelScalars.sellingPrice),
-          baseRoomPrice: baseRoomPrice == null ? null : decimal(baseRoomPrice as { toString(): string }),
-          extraBedPrice: extraBedPrice == null ? null : decimal(extraBedPrice as { toString(): string }),
+          baseRoomPrice:
+            baseRoomPrice == null ? null : decimal(baseRoomPrice as { toString(): string }),
+          extraBedPrice:
+            extraBedPrice == null ? null : decimal(extraBedPrice as { toString(): string }),
           childWithoutBedPrice:
-            childWithoutBedPrice == null ? null : decimal(childWithoutBedPrice as { toString(): string }),
+            childWithoutBedPrice == null
+              ? null
+              : decimal(childWithoutBedPrice as { toString(): string }),
           roomLines: presentLines(hotel.roomLines, 'hotelRoomTypeId'),
           mealPlanLines: presentLines(hotel.mealPlanLines, 'hotelMealPlanId'),
           // Master ids are an internal editing aid. Customer-facing output
@@ -813,9 +831,9 @@ type HotelRowInput = QuotationVersionInput['hotels'][number];
  * one, the total is the live sum of every room allocation. Rows without lines
  * (legacy writers) pass through untouched.
  */
-function syncHotelLineScalars<T extends Pick<HotelRowInput, 'roomLines' | 'mealPlanLines'> & Record<string, unknown>>(
-  hotel: T,
-): T {
+function syncHotelLineScalars<
+  T extends Pick<HotelRowInput, 'roomLines' | 'mealPlanLines'> & Record<string, unknown>,
+>(hotel: T): T {
   const roomLines = Array.isArray(hotel.roomLines) ? hotel.roomLines : [];
   const mealPlanLines = Array.isArray(hotel.mealPlanLines) ? hotel.mealPlanLines : [];
   if (!roomLines.length && !mealPlanLines.length) return hotel;
@@ -873,7 +891,9 @@ function syncCruiseLineScalars<
   if (service.serviceType !== 'CRUISE') return service;
   const rawLines = service.cruiseRoomLines;
   if (!Array.isArray(rawLines)) return service;
-  const lines = rawLines as NonNullable<QuotationVersionInput['services'][number]['cruiseRoomLines']>;
+  const lines = rawLines as NonNullable<
+    QuotationVersionInput['services'][number]['cruiseRoomLines']
+  >;
   if (!lines.length) {
     return {
       ...service,
@@ -887,8 +907,7 @@ function syncCruiseLineScalars<
     cruiseRoomTypeId?: string | null;
     roomType?: string | null;
   };
-  const nights =
-    (service as unknown as { cruiseNights?: number | null }).cruiseNights ?? null;
+  const nights = (service as unknown as { cruiseNights?: number | null }).cruiseNights ?? null;
   const total = calculateCruiseRoomLinesTotal(
     { cruiseRoomLines: lines, cruiseNights: nights } as unknown as Parameters<
       typeof calculateCruiseRoomLinesTotal
@@ -923,10 +942,12 @@ function normalizeVersionInput(input: QuotationVersionInput, allowCosting: boole
           // Costing lines are internal data — same gating as the row-level cost.
           internalCost: allowCosting ? (line.internalCost ?? null) : null,
         })),
-        mealPlanLines: (Array.isArray(hotel.mealPlanLines) ? hotel.mealPlanLines : []).map((line) => ({
-          ...line,
-          internalCost: allowCosting ? (line.internalCost ?? null) : null,
-        })),
+        mealPlanLines: (Array.isArray(hotel.mealPlanLines) ? hotel.mealPlanLines : []).map(
+          (line) => ({
+            ...line,
+            internalCost: allowCosting ? (line.internalCost ?? null) : null,
+          }),
+        ),
       }),
     ),
     services: input.services.map((service) =>
@@ -965,7 +986,9 @@ async function enrichHotelPricingSnapshots(
           roomLines.map(async (line) => {
             if (!line.hotelRoomTypeId) return line;
             const needsResolution =
-              line.baseRoomPrice == null && line.extraBedPrice == null && line.childWithoutBedPrice == null;
+              line.baseRoomPrice == null &&
+              line.extraBedPrice == null &&
+              line.childWithoutBedPrice == null;
             // If any pricing snapshot already set (manual), keep it.
             if (!needsResolution && line.baseRoomPrice != null) return line;
             const resolved = await resolveHotelRoomPricing(
@@ -988,12 +1011,18 @@ async function enrichHotelPricingSnapshots(
         return lines === roomLines ? hotel : { ...hotel, roomLines: lines };
       }
       const needsResolution =
-        hotel.baseRoomPrice == null && hotel.extraBedPrice == null && hotel.childWithoutBedPrice == null;
+        hotel.baseRoomPrice == null &&
+        hotel.extraBedPrice == null &&
+        hotel.childWithoutBedPrice == null;
       // If any pricing snapshot already set (manual), keep it.
       if (!needsResolution && hotel.baseRoomPrice != null) {
         return lines === roomLines ? hotel : { ...hotel, roomLines: lines };
       }
-      const resolved = await resolveHotelRoomPricing(imageOwnerCompanyIds, hotel.hotelRoomTypeId, hotel.checkInDate);
+      const resolved = await resolveHotelRoomPricing(
+        imageOwnerCompanyIds,
+        hotel.hotelRoomTypeId,
+        hotel.checkInDate,
+      );
       if (!resolved) return lines === roomLines ? hotel : { ...hotel, roomLines: lines };
       return {
         ...hotel,
@@ -1008,7 +1037,10 @@ async function enrichHotelPricingSnapshots(
   return { ...input, hotels: enrichedHotels };
 }
 
-type ImageMasterDb = Pick<Prisma.TransactionClient, 'hotel' | 'cruise' | 'vehicle' | 'sightseeing' | 'addOnService'>;
+type ImageMasterDb = Pick<
+  Prisma.TransactionClient,
+  'hotel' | 'cruise' | 'vehicle' | 'sightseeing' | 'addOnService'
+>;
 
 const imageMasterSelect = {
   id: true,
@@ -1201,10 +1233,10 @@ function versionCreateData(
       currency: normalized.currency,
       pricingMode: normalized.pricingMode,
       // Customer-facing pricing presentation (heading/subheading/order).
-      pricingHeading:
-        (typeof input.pricingHeading === 'string' && input.pricingHeading.trim()
-          ? input.pricingHeading
-          : (normalized.pricingHeading ?? 'Price Breakdown')).slice(0, 120),
+      pricingHeading: (typeof input.pricingHeading === 'string' && input.pricingHeading.trim()
+        ? input.pricingHeading
+        : (normalized.pricingHeading ?? 'Price Breakdown')
+      ).slice(0, 120),
       pricingSubheading:
         typeof input.pricingSubheading === 'string' && input.pricingSubheading.trim()
           ? input.pricingSubheading.slice(0, 200)
@@ -1305,7 +1337,8 @@ function versionCreateData(
       cruiseRoomLines: Array.isArray(
         (row as unknown as { cruiseRoomLines?: unknown }).cruiseRoomLines,
       )
-        ? ((row as unknown as { cruiseRoomLines: unknown[] }).cruiseRoomLines as unknown as Prisma.InputJsonValue)
+        ? ((row as unknown as { cruiseRoomLines: unknown[] })
+            .cruiseRoomLines as unknown as Prisma.InputJsonValue)
         : undefined,
       vehicleId: row.vehicleId ?? null,
       sightseeingId: row.sightseeingId ?? null,
@@ -1453,10 +1486,18 @@ function fromVersion(source: FullVersion): QuotationVersionInput {
         ...(showCheckOutTime == null ? {} : { showCheckOutTime }),
         internalCost: internalCost.toNumber(),
         sellingPrice: sellingPrice.toNumber(),
-        baseRoomPrice: baseRoomPrice == null ? null : (baseRoomPrice as unknown as { toNumber: () => number }).toNumber(),
-        extraBedPrice: extraBedPrice == null ? null : (extraBedPrice as unknown as { toNumber: () => number }).toNumber(),
+        baseRoomPrice:
+          baseRoomPrice == null
+            ? null
+            : (baseRoomPrice as unknown as { toNumber: () => number }).toNumber(),
+        extraBedPrice:
+          extraBedPrice == null
+            ? null
+            : (extraBedPrice as unknown as { toNumber: () => number }).toNumber(),
         childWithoutBedPrice:
-          childWithoutBedPrice == null ? null : (childWithoutBedPrice as unknown as { toNumber: () => number }).toNumber(),
+          childWithoutBedPrice == null
+            ? null
+            : (childWithoutBedPrice as unknown as { toNumber: () => number }).toNumber(),
         // Legacy rows store NULL in the Json column; normalize to [] so the
         // snapshot stays valid for every copy/revision path.
         images: (Array.isArray(rawImages) ? rawImages : []) as Array<{
@@ -1548,13 +1589,15 @@ async function validateDestinationExpertConfig(
 function masterRefServices(input: QuotationVersionInput) {
   // Segments across every flight record (validated input always carries the
   // canonical flights array; legacy mirrors are folded away on write).
-  const flightRefs = (input.flightDetails?.flights ?? []).flatMap((flight) => [
-    ...(flight.outbound.segments ?? []),
-    ...(flight.returnJourney.segments ?? []),
-  ]).map((segment) => ({
-    serviceType: 'FLIGHT' as const,
-    airlineId: segment.airlineId,
-  }));
+  const flightRefs = (input.flightDetails?.flights ?? [])
+    .flatMap((flight) => [
+      ...(flight.outbound.segments ?? []),
+      ...(flight.returnJourney.segments ?? []),
+    ])
+    .map((segment) => ({
+      serviceType: 'FLIGHT' as const,
+      airlineId: segment.airlineId,
+    }));
   const activityRefs =
     input.sightseeingDetails?.days.flatMap((day) =>
       day.activities.map((activity) => ({
@@ -2077,14 +2120,30 @@ async function resolveDestinationExpertPresentation(
   if (!user) return null;
   // Snapshot fields from quotation config (imported preset) take precedence over live user data
   const snap = config as unknown as Record<string, unknown>;
-  const snapJobTitle = typeof snap.jobTitle === 'string' ? (snap.jobTitle as string).trim() || null : (snap.jobTitle as string | null) ?? null;
-  const snapBio = typeof snap.bio === 'string' ? (snap.bio as string).trim() || null : (snap.bio as string | null) ?? null;
-  const snapSpecialization = typeof snap.specialization === 'string' ? (snap.specialization as string).trim() || null : (snap.specialization as string | null) ?? null;
+  const snapJobTitle =
+    typeof snap.jobTitle === 'string'
+      ? (snap.jobTitle as string).trim() || null
+      : ((snap.jobTitle as string | null) ?? null);
+  const snapBio =
+    typeof snap.bio === 'string'
+      ? (snap.bio as string).trim() || null
+      : ((snap.bio as string | null) ?? null);
+  const snapSpecialization =
+    typeof snap.specialization === 'string'
+      ? (snap.specialization as string).trim() || null
+      : ((snap.specialization as string | null) ?? null);
   const snapYears = snap.yearsOfExperience != null ? Number(snap.yearsOfExperience) : null;
   const snapTrips = snap.tripsPlanned != null ? Number(snap.tripsPlanned) : null;
-  const snapLanguages = typeof snap.languages === 'string' ? (snap.languages as string).trim() || null : (snap.languages as string | null) ?? null;
-  const snapGender = snap.gender === 'MALE' || snap.gender === 'FEMALE' ? (snap.gender as string) : null;
-  const snapProfileImageUrl = typeof snap.profileImageUrl === 'string' && (snap.profileImageUrl as string).trim() ? (snap.profileImageUrl as string).trim() : null;
+  const snapLanguages =
+    typeof snap.languages === 'string'
+      ? (snap.languages as string).trim() || null
+      : ((snap.languages as string | null) ?? null);
+  const snapGender =
+    snap.gender === 'MALE' || snap.gender === 'FEMALE' ? (snap.gender as string) : null;
+  const snapProfileImageUrl =
+    typeof snap.profileImageUrl === 'string' && (snap.profileImageUrl as string).trim()
+      ? (snap.profileImageUrl as string).trim()
+      : null;
   const hasSnapProfileImage = 'profileImageUrl' in snap;
 
   // Avatar priority: snapshot custom photo > user custom photo > gender default > no avatar.
@@ -2123,13 +2182,13 @@ async function resolveDestinationExpertPresentation(
 
   const effectiveWhatsapp = hasWhatsapp
     ? savedWhatsapp?.trim() || null
-    : (user.whatsappNumber?.trim() || user.phone?.trim() || company?.phone?.trim() || null);
+    : user.whatsappNumber?.trim() || user.phone?.trim() || company?.phone?.trim() || null;
   const effectiveCall = hasCall
     ? savedCall?.trim() || null
-    : (user.phone?.trim() || company?.phone?.trim() || null);
+    : user.phone?.trim() || company?.phone?.trim() || null;
   const effectiveEmail = hasEmail
     ? savedEmail?.trim().toLowerCase() || null
-    : (user.email?.trim() || company?.email?.trim() || null);
+    : user.email?.trim() || company?.email?.trim() || null;
 
   return {
     id: user.id,
@@ -2338,43 +2397,75 @@ async function createVersion(
   });
 }
 
-function escapeHtml(value: string) {
-  return value.replace(
-    /[&<>"']/g,
-    (character) =>
-      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character] ??
-      character,
-  );
-}
+import {
+  asAbsoluteHttpsUrl,
+  buildQuotationPreviewHtml,
+  escapeHtml,
+} from './quotation-preview-html.js';
 
 const PREVIEW_TITLE_BASE = 'Personalized Travel Quotation';
 
+type PreviewCompanyBranding = {
+  siteName: string;
+  imageUrl?: string | undefined;
+  imageAlt?: string | undefined;
+  imageMimeType?: string | undefined;
+};
+
 /**
- * Minimal crawler document for a public quotation link: title, type, and
- * canonical URL only. Deliberately no description, no branding, no scripts
- * and no images — unfurlers read the initial HTML as-is.
+ * Tenant branding for a quotation preview, resolved from the quotation's OWN
+ * company — never the current session, never a global default. Returns the
+ * company name with an absolute HTTPS logo URL when a confirmed logo exists
+ * and a signed URL can be minted; otherwise name-only (no image tag at all —
+ * a generic CRM logo must never stand in for a tenant).
  */
-export function buildQuotationPreviewHtml(input: { title: string; canonicalUrl: string }): string {
-  const title = escapeHtml(input.title);
-  const url = escapeHtml(input.canonicalUrl);
-  return (
-    '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">' +
-    `<title>${title}</title>` +
-    `<meta property="og:title" content="${title}">` +
-    '<meta property="og:type" content="website">' +
-    `<meta property="og:url" content="${url}">` +
-    '</head><body></body></html>'
-  );
+async function previewCompanyBranding(companyId: string): Promise<PreviewCompanyBranding | null> {
+  const company = await prisma.company.findUnique({
+    where: { id: companyId },
+    select: {
+      name: true,
+      logoObjectKey: true,
+      logoConfirmedAt: true,
+      logoMimeType: true,
+    },
+  });
+  if (!company) return null;
+  let imageUrl: string | undefined;
+  if (company.logoObjectKey && company.logoConfirmedAt) {
+    try {
+      const signed = await storageService.createDownloadUrl(
+        company.logoObjectKey,
+        'logo',
+        env.OG_IMAGE_PRESIGNED_URL_EXPIRY_SECONDS,
+        'inline',
+      );
+      imageUrl = asAbsoluteHttpsUrl(signed);
+    } catch {
+      imageUrl = undefined;
+    }
+  }
+  return {
+    siteName: company.name,
+    imageUrl,
+    imageAlt: company.name,
+    imageMimeType: company.logoMimeType ?? undefined,
+  };
 }
 
 function previewDocumentForQuotation(
-  quotation: { companyId?: unknown; query?: { customerName?: string | null } | null },
+  quotation: { id?: unknown; companyId: string; query?: { customerName?: string | null } | null },
   canonicalUrl: string,
+  branding: PreviewCompanyBranding | null,
 ): string {
   const leadName = quotation.query?.customerName?.trim() || null;
+  const siteName = branding?.siteName ?? PREVIEW_TITLE_BASE;
   return buildQuotationPreviewHtml({
-    title: leadName ? `${PREVIEW_TITLE_BASE} – ${leadName}` : PREVIEW_TITLE_BASE,
+    title: leadName ? `${siteName} – ${leadName}` : siteName,
     canonicalUrl,
+    siteName,
+    imageUrl: branding?.imageUrl,
+    imageAlt: branding?.imageAlt,
+    imageMimeType: branding?.imageMimeType,
   });
 }
 
@@ -2537,9 +2628,13 @@ export const quotationsService = {
             ...(showCheckOutTime == null ? {} : { showCheckOutTime }),
             internalCost: internalCost?.toNumber(),
             sellingPrice: sellingPrice?.toNumber(),
-            baseRoomPrice: (baseRoomPrice as unknown as { toNumber?: () => number })?.toNumber?.() ?? null,
-            extraBedPrice: (extraBedPrice as unknown as { toNumber?: () => number })?.toNumber?.() ?? null,
-            childWithoutBedPrice: (childWithoutBedPrice as unknown as { toNumber?: () => number })?.toNumber?.() ?? null,
+            baseRoomPrice:
+              (baseRoomPrice as unknown as { toNumber?: () => number })?.toNumber?.() ?? null,
+            extraBedPrice:
+              (extraBedPrice as unknown as { toNumber?: () => number })?.toNumber?.() ?? null,
+            childWithoutBedPrice:
+              (childWithoutBedPrice as unknown as { toNumber?: () => number })?.toNumber?.() ??
+              null,
             // Template hotel options have no images column; keep the shared
             // hotel schema shape valid on apply.
             images: [],
@@ -2612,9 +2707,7 @@ export const quotationsService = {
       source?.destinationSummary ??
       (leadDestinationParts.join(' • ') || lead.departureCity || 'Travel package');
     const primaryDestination =
-      leadDestinationParts[0] ||
-      destination.split(/[•(→>,]/)[0]?.trim() ||
-      destination;
+      leadDestinationParts[0] || destination.split(/[•(→>,]/)[0]?.trim() || destination;
     const defaultTitle = `${primaryDestination} Package for ${lead.customerName}`;
     // The weblink package heading defaults to the lead-based label (never the
     // quotation title, never an itinerary city).
@@ -2643,16 +2736,10 @@ export const quotationsService = {
       currency: input.version?.currency ?? input.currency ?? source?.currency ?? lead.currency,
       pricingMode: input.version?.pricingMode ?? source?.pricingMode ?? 'PER_PERSON',
       pricingHeading: input.version?.pricingHeading ?? source?.pricingHeading ?? 'Price Breakdown',
-      pricingSubheading:
-        input.version?.pricingSubheading ?? source?.pricingSubheading ?? null,
+      pricingSubheading: input.version?.pricingSubheading ?? source?.pricingSubheading ?? null,
       pricingDisplayOrder:
-        input.version?.pricingDisplayOrder ??
-        source?.pricingDisplayOrder ??
-        undefined,
-      pricingRowOrder:
-        input.version?.pricingRowOrder ??
-        source?.pricingRowOrder ??
-        undefined,
+        input.version?.pricingDisplayOrder ?? source?.pricingDisplayOrder ?? undefined,
+      pricingRowOrder: input.version?.pricingRowOrder ?? source?.pricingRowOrder ?? undefined,
       markupMode: input.version?.markupMode ?? source?.markupMode ?? 'NONE',
       markupValue: input.version?.markupValue ?? source?.markupValue ?? 0,
       taxRate: input.version?.taxRate ?? source?.taxRate ?? 0,
@@ -2758,7 +2845,7 @@ export const quotationsService = {
           // Carry the Lead's child ages into the quotation: the PDF and the
           // Weblink both render from these columns, so the two outputs always
           // agree. Explicit input overrides the Lead snapshot.
-          ...((() => {
+          ...(() => {
             const leadRow = lead as typeof lead & Record<string, unknown>;
             const pick = (
               key:
@@ -2770,7 +2857,7 @@ export const quotationsService = {
                 | 'childWithoutBedNames'
                 | 'infantNames',
             ) => {
-              const value = (input[key] ?? (leadRow[key] as unknown[] | null | undefined)) ?? null;
+              const value = input[key] ?? (leadRow[key] as unknown[] | null | undefined) ?? null;
               return Array.isArray(value) && value.length ? { [key]: value } : {};
             };
             return {
@@ -2782,7 +2869,7 @@ export const quotationsService = {
               ...pick('childWithoutBedNames'),
               ...pick('infantNames'),
             };
-          })()),
+          })(),
           currency: input.currency ?? lead.currency,
           validUntil: input.validUntil ?? null,
           publicToken: token,
@@ -2948,7 +3035,10 @@ export const quotationsService = {
         await storageService.deleteObject(key);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        logger.error({ key, reason: message, quotationId: id }, 'S3 delete failed during permanent quotation deletion');
+        logger.error(
+          { key, reason: message, quotationId: id },
+          'S3 delete failed during permanent quotation deletion',
+        );
         s3Failures.push(key);
       }
     }
@@ -2969,18 +3059,38 @@ export const quotationsService = {
     await prisma.$transaction(async (tx) => {
       // Child tables first
       if (versionIds.length > 0) {
-        await tx.quotationVersionItineraryDay.deleteMany({ where: { quotationVersionId: { in: versionIds } } });
-        await tx.quotationVersionHotelOption.deleteMany({ where: { quotationVersionId: { in: versionIds } } });
-        await tx.quotationVersionService.deleteMany({ where: { quotationVersionId: { in: versionIds } } });
-        await tx.quotationVersionInclusion.deleteMany({ where: { quotationVersionId: { in: versionIds } } });
-        await tx.quotationVersionExclusion.deleteMany({ where: { quotationVersionId: { in: versionIds } } });
-        await tx.quotationVersionTerm.deleteMany({ where: { quotationVersionId: { in: versionIds } } });
+        await tx.quotationVersionItineraryDay.deleteMany({
+          where: { quotationVersionId: { in: versionIds } },
+        });
+        await tx.quotationVersionHotelOption.deleteMany({
+          where: { quotationVersionId: { in: versionIds } },
+        });
+        await tx.quotationVersionService.deleteMany({
+          where: { quotationVersionId: { in: versionIds } },
+        });
+        await tx.quotationVersionInclusion.deleteMany({
+          where: { quotationVersionId: { in: versionIds } },
+        });
+        await tx.quotationVersionExclusion.deleteMany({
+          where: { quotationVersionId: { in: versionIds } },
+        });
+        await tx.quotationVersionTerm.deleteMany({
+          where: { quotationVersionId: { in: versionIds } },
+        });
       }
-      await tx.quotationWeblinkView.deleteMany({ where: { companyId: auth.companyId, quotationId: id } });
-      await tx.quotationEmailLog.deleteMany({ where: { companyId: auth.companyId, quotationId: id } });
-      await tx.quotationDocument.deleteMany({ where: { companyId: auth.companyId, quotationId: id } });
+      await tx.quotationWeblinkView.deleteMany({
+        where: { companyId: auth.companyId, quotationId: id },
+      });
+      await tx.quotationEmailLog.deleteMany({
+        where: { companyId: auth.companyId, quotationId: id },
+      });
+      await tx.quotationDocument.deleteMany({
+        where: { companyId: auth.companyId, quotationId: id },
+      });
       await tx.queryFollowUp.deleteMany({ where: { companyId: auth.companyId, quotationId: id } });
-      await tx.quotationVersion.deleteMany({ where: { companyId: auth.companyId, quotationId: id } });
+      await tx.quotationVersion.deleteMany({
+        where: { companyId: auth.companyId, quotationId: id },
+      });
       await tx.quotation.delete({ where: { id } });
       await tx.activityLog.create({
         data: quotationAudit(auth, 'QUOTATION_DELETED', 'Quotation', id, context),
@@ -3232,12 +3342,14 @@ export const quotationsService = {
       throw new ValidationError('This upload does not belong to this Page 1 slot.');
     const metadata = await storageService.headObject(input.objectKey);
     if (!metadata) throw new ValidationError('The uploaded Page 1 image could not be found.');
-    if (metadata.size !== input.fileSize || metadata.contentType !== input.mimeType.trim().toLowerCase())
+    if (
+      metadata.size !== input.fileSize ||
+      metadata.contentType !== input.mimeType.trim().toLowerCase()
+    )
       throw new ValidationError('Uploaded image metadata does not match the approved file.');
-    const current =
-      normalizeStylishPdfPage1(
-        (version as unknown as { stylishPdfPage1?: unknown }).stylishPdfPage1,
-      ) ?? { hero: null, cards: [null, null, null] };
+    const current = normalizeStylishPdfPage1(
+      (version as unknown as { stylishPdfPage1?: unknown }).stylishPdfPage1,
+    ) ?? { hero: null, cards: [null, null, null] };
     const slotValue = {
       mode: 'CUSTOM' as const,
       objectKey: input.objectKey,
@@ -3289,10 +3401,9 @@ export const quotationsService = {
     context: RequestContext,
   ) {
     const version = await getVersion(auth, id, versionId);
-    const current =
-      normalizeStylishPdfPage1(
-        (version as unknown as { stylishPdfPage1?: unknown }).stylishPdfPage1,
-      ) ?? { hero: null, cards: [null, null, null] };
+    const current = normalizeStylishPdfPage1(
+      (version as unknown as { stylishPdfPage1?: unknown }).stylishPdfPage1,
+    ) ?? { hero: null, cards: [null, null, null] };
     const cardIndex = slot === 'hero' ? -1 : Number(slot.split('-')[1]) - 1;
     const previous =
       slot === 'hero'
@@ -3391,7 +3502,9 @@ export const quotationsService = {
     // into a silent ₹0 / wrong-total customer document. Errors block
     // finalization; warnings are surfaced in the builder only.
     const pricingIssues = validateQuotationPricing({
-      version: fromVersion(version) as unknown as Parameters<typeof validateQuotationPricing>[0]['version'],
+      version: fromVersion(version) as unknown as Parameters<
+        typeof validateQuotationPricing
+      >[0]['version'],
       quotation: {
         adults: quotation.adults,
         childrenWithBed: quotation.childrenWithBed,
@@ -3444,11 +3557,27 @@ export const quotationsService = {
       where: { id },
       select: { publicToken: true },
     });
-    if (!stored.publicToken) throw new ConflictError('A public weblink is required for Weblink PDF.');
+    if (!stored.publicToken)
+      throw new ConflictError('A public weblink is required for Weblink PDF.');
     const baseUrl = env.WEB_URL.replace(/\/$/, '');
-    return renderWeblinkPdfFromUrl({
-      url: buildWeblinkPdfUrl(baseUrl, stored.publicToken),
-    });
+    try {
+      return await renderWeblinkPdfFromUrl({
+        url: buildWeblinkPdfUrl(baseUrl, stored.publicToken),
+      });
+    } catch (error) {
+      // Stage-tagged reason only: URLs carry unguessable public tokens and
+      // must never reach logs. IDs below are internal UUIDs, safe to log.
+      logger.error(
+        {
+          style: 'WEBLINK',
+          quotationId: id,
+          versionId,
+          reason: sanitizeWeblinkPdfError(error),
+        },
+        'Weblink PDF render failed; Classic/Stylish paths are unaffected',
+      );
+      throw error;
+    }
   },
 
   async generatePdf(
@@ -3544,417 +3673,421 @@ export const quotationsService = {
     // aligned with the quotation stays so both PDF renderers can consume it
     // without exposing Master ids.
     let hotelPresentations: QuotationPdfInput['hotelPresentations'];
-    if (!isWeblinkPdf) try {
-      const ownerCompanyIds = await linkedMasterOwnerCompanyIds(auth.companyId);
-      const presentationByOptionId = await resolveHotelPresentations(
-        ownerCompanyIds,
-        version.hotels.map((hotel) => ({ id: hotel.id, hotelId: hotel.hotelId })),
-      );
-      hotelPresentations = version.hotels.map((hotel) => {
-        const presentation = presentationByOptionId[hotel.id];
-        return presentation
-          ? {
-              starCategory: presentation.starCategory,
-              starRating: presentation.starRating,
-              address: presentation.address,
-              reviewLink: presentation.reviewLink,
-            }
-          : null;
-      });
-    } catch {
-      hotelPresentations = undefined;
-    }
+    if (!isWeblinkPdf)
+      try {
+        const ownerCompanyIds = await linkedMasterOwnerCompanyIds(auth.companyId);
+        const presentationByOptionId = await resolveHotelPresentations(
+          ownerCompanyIds,
+          version.hotels.map((hotel) => ({ id: hotel.id, hotelId: hotel.hotelId })),
+        );
+        hotelPresentations = version.hotels.map((hotel) => {
+          const presentation = presentationByOptionId[hotel.id];
+          return presentation
+            ? {
+                starCategory: presentation.starCategory,
+                starRating: presentation.starRating,
+                address: presentation.address,
+                reviewLink: presentation.reviewLink,
+              }
+            : null;
+        });
+      } catch {
+        hotelPresentations = undefined;
+      }
 
     // --- PDF image resolution: server-side buffers, never signed URLs ----------
     // (skipped for Weblink PDF — the browser loads the weblink's own images).
     let images: QuotationPdfInput['images'] | undefined;
     let pdfSightseeingDetails: unknown = version.sightseeingDetails;
-    if (!isWeblinkPdf) try {
-      const imageCache = new Map<string, Buffer | null>();
-      const fetchImage = async (key: string | null | undefined): Promise<Buffer | null> => {
-        if (!key) return null;
-        const cached = imageCache.get(key);
-        if (cached !== undefined) return cached;
-        try {
-          let buf = await storageService.getObject(key);
-          // PDFKit cannot decode WebP; convert it to PNG so masters that upload
-          // WebP (vehicles, hotels, cruises, ...) render in the PDF exactly as
-          // they do in the public weblink. Non-WebP buffers pass through.
-          if (buf) {
-            const png = await webpToPng(buf);
-            if (png) buf = png;
+    if (!isWeblinkPdf)
+      try {
+        const imageCache = new Map<string, Buffer | null>();
+        const fetchImage = async (key: string | null | undefined): Promise<Buffer | null> => {
+          if (!key) return null;
+          const cached = imageCache.get(key);
+          if (cached !== undefined) return cached;
+          try {
+            let buf = await storageService.getObject(key);
+            // PDFKit cannot decode WebP; convert it to PNG so masters that upload
+            // WebP (vehicles, hotels, cruises, ...) render in the PDF exactly as
+            // they do in the public weblink. Non-WebP buffers pass through.
+            if (buf) {
+              const png = await webpToPng(buf);
+              if (png) buf = png;
+            }
+            imageCache.set(key, buf);
+            return buf;
+          } catch {
+            imageCache.set(key, null);
+            return null;
           }
-          imageCache.set(key, buf);
-          return buf;
-        } catch {
-          imageCache.set(key, null);
+        };
+        const externalImageCache = new Map<string, Buffer | null>();
+        const fetchExternalImage = async (url: string | undefined): Promise<Buffer | null> => {
+          if (!url) return null;
+          const cached = externalImageCache.get(url);
+          if (cached !== undefined) return cached;
+          try {
+            const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+            if (!res.ok) throw new Error('Image response was not successful.');
+            const contentType = (res.headers.get('content-type') ?? '').toLowerCase();
+            if (contentType && !contentType.startsWith('image/'))
+              throw new Error('Snapshot URL did not return an image.');
+            const raw = Buffer.from(await res.arrayBuffer());
+            if (raw.length < 12) throw new Error('Snapshot image was empty.');
+            const image = (await webpToPng(raw)) ?? raw;
+            externalImageCache.set(url, image);
+            return image;
+          } catch {
+            externalImageCache.set(url, null);
+            return null;
+          }
+        };
+        const snapshotImageBytes = async (
+          image: StoredQuotationImage,
+          allowLegacyExternal: boolean,
+        ) =>
+          image.objectKey
+            ? fetchImage(image.objectKey)
+            : allowLegacyExternal
+              ? fetchExternalImage(image.url)
+              : null;
+        const selectedSnapshotBytes = async (
+          raw: unknown,
+          selected: string | null | undefined,
+          allowLegacyExternal = false,
+        ) => {
+          const all = storedQuotationImages(raw);
+          if (!all.length) return null;
+          const preferred = resolvePdfSnapshotImage(raw, selected);
+          const candidates = preferred
+            ? [preferred, ...all.filter((image) => image !== preferred)]
+            : all;
+          for (const image of candidates) {
+            const bytes = await snapshotImageBytes(image, allowLegacyExternal);
+            if (bytes) return bytes;
+            if (allowLegacyExternal && image.thumbnailUrl) {
+              const thumbnail = await fetchExternalImage(image.thumbnailUrl);
+              if (thumbnail) return thumbnail;
+            }
+          }
           return null;
-        }
-      };
-      const externalImageCache = new Map<string, Buffer | null>();
-      const fetchExternalImage = async (url: string | undefined): Promise<Buffer | null> => {
-        if (!url) return null;
-        const cached = externalImageCache.get(url);
-        if (cached !== undefined) return cached;
-        try {
-          const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
-          if (!res.ok) throw new Error('Image response was not successful.');
-          const contentType = (res.headers.get('content-type') ?? '').toLowerCase();
-          if (contentType && !contentType.startsWith('image/'))
-            throw new Error('Snapshot URL did not return an image.');
-          const raw = Buffer.from(await res.arrayBuffer());
-          if (raw.length < 12) throw new Error('Snapshot image was empty.');
-          const image = (await webpToPng(raw)) ?? raw;
-          externalImageCache.set(url, image);
-          return image;
-        } catch {
-          externalImageCache.set(url, null);
-          return null;
-        }
-      };
-      const snapshotImageBytes = async (
-        image: StoredQuotationImage,
-        allowLegacyExternal: boolean,
-      ) =>
-        image.objectKey
-          ? fetchImage(image.objectKey)
-          : allowLegacyExternal
-            ? fetchExternalImage(image.url)
-            : null;
-      const selectedSnapshotBytes = async (
-        raw: unknown,
-        selected: string | null | undefined,
-        allowLegacyExternal = false,
-      ) => {
-        const all = storedQuotationImages(raw);
-        if (!all.length) return null;
-        const preferred = resolvePdfSnapshotImage(raw, selected);
-        const candidates = preferred
-          ? [preferred, ...all.filter((image) => image !== preferred)]
-          : all;
-        for (const image of candidates) {
-          const bytes = await snapshotImageBytes(image, allowLegacyExternal);
-          if (bytes) return bytes;
-          if (allowLegacyExternal && image.thumbnailUrl) {
-            const thumbnail = await fetchExternalImage(image.thumbnailUrl);
-            if (thumbnail) return thumbnail;
-          }
-        }
-        return null;
-      };
+        };
 
-      // Destination hero image: first matching Destination master in the quote's
-      // ordered itinerary data — the lead itinerary `country` is the Master
-      // destination name (e.g. "Malaysia"), while `destination` is the city.
-      let coverImage: Buffer | null = null;
-      const destRecord = await findDestinationImageRecord(
-        auth.companyId,
-        quotation.destinationSummary,
-        quotation.query?.itinerary,
-      );
-      if (destRecord) {
-        coverImage = await fetchImage(destRecord.imageObjectKey);
-      }
-      // Every linked master id was validated when persisted. Limit legacy live
-      // fallbacks to the tenant and the single System company; snapshots remain
-      // authoritative for all newly written rows.
-      const masterOwnerCompanyIds = await linkedMasterOwnerCompanyIds(auth.companyId);
+        // Destination hero image: first matching Destination master in the quote's
+        // ordered itinerary data — the lead itinerary `country` is the Master
+        // destination name (e.g. "Malaysia"), while `destination` is the city.
+        let coverImage: Buffer | null = null;
+        const destRecord = await findDestinationImageRecord(
+          auth.companyId,
+          quotation.destinationSummary,
+          quotation.query?.itinerary,
+        );
+        if (destRecord) {
+          coverImage = await fetchImage(destRecord.imageObjectKey);
+        }
+        // Every linked master id was validated when persisted. Limit legacy live
+        // fallbacks to the tenant and the single System company; snapshots remain
+        // authoritative for all newly written rows.
+        const masterOwnerCompanyIds = await linkedMasterOwnerCompanyIds(auth.companyId);
 
-      // Each hotel stay owns an ordered snapshot. New Master-backed snapshots
-      // use immutable object keys; old bookmark snapshots keep their URLs. The
-      // linked live Master is consulted only for legacy rows with no snapshot.
-      const hotelDetailsRaw = version.hotelDetails as
-        | {
-            images?: unknown;
-            pdfImageUrl?: string | null;
-          }
-        | null
-        | undefined;
-      const stayImagesFor = (h: (typeof version.hotels)[number]): unknown => {
-        if (Array.isArray(h.images)) return h.images;
-        // Legacy: a single-bookmark quotation stored its gallery on hotelDetails.
-        // The section schema has historically defaulted to `images: []`, which
-        // means "no bookmark gallery" rather than an authoritative removal.
-        // Only a non-empty legacy section gallery may suppress the linked
-        // Hotel Master's established PDF fallback.
-        return Array.isArray(hotelDetailsRaw?.images) && hotelDetailsRaw.images.length > 0
-          ? hotelDetailsRaw.images
-          : undefined;
-      };
-      const legacyHotelIds = version.hotels
-        .filter((hotel) => !Array.isArray(stayImagesFor(hotel)))
-        .map((hotel) => hotel.hotelId)
-        .filter((id): id is string => Boolean(id));
-      const hotelImageMap = new Map<string, Buffer | null>();
-      if (legacyHotelIds.length) {
-        const hotelMasters = await prisma.hotel.findMany({
-          where: {
-            companyId: { in: masterOwnerCompanyIds },
-            id: { in: [...new Set(legacyHotelIds)] },
-            imageObjectKey: { not: null },
-            imageConfirmedAt: { not: null },
-          },
-          select: { id: true, imageObjectKey: true },
-        });
-        for (const hotel of hotelMasters)
-          hotelImageMap.set(hotel.id, await fetchImage(hotel.imageObjectKey));
-      }
-      const hotelImages = await Promise.all(
-        version.hotels.map(async (hotel) => {
-          const snapshot = stayImagesFor(hotel);
-          if (Array.isArray(snapshot))
-            return selectedSnapshotBytes(
-              snapshot,
-              hotel.pdfImageUrl ?? hotelDetailsRaw?.pdfImageUrl,
-              // Hotel bookmark URLs were already fetched by the legacy PDF
-              // path. New Master galleries always use quotation-owned keys.
-              true,
-            );
-          return hotel.hotelId ? (hotelImageMap.get(hotel.hotelId) ?? null) : null;
-        }),
-      );
-
-      // Sightseeing activity images. Gallery snapshots are resolved per
-      // activity (not per Master id), so two rows linked to the same Master can
-      // independently reorder/remove/select their PDF image. A synthetic
-      // snapshot key feeds the existing renderer without persisting anything.
-      const sightseeingIds: string[] = [];
-      const itineraryDocumentIds: string[] = [];
-      const itineraryImageMap = new Map<string, Buffer>();
-      const ssData = version.sightseeingDetails as Record<string, unknown> | null;
-      if (ssData?.days && Array.isArray(ssData.days)) {
-        const pdfDays: Array<Record<string, unknown>> = [];
-        for (const [dayIndex, day] of (ssData.days as Array<Record<string, unknown>>).entries()) {
-          const acts = Array.isArray(day.activities)
-            ? (day.activities as Array<Record<string, unknown>>)
-            : [];
-          const pdfActivities: Array<Record<string, unknown>> = [];
-          for (const [activityIndex, act] of acts.entries()) {
-            const galleryPresent =
-              typeof act.imageSnapshotPresent === 'boolean'
-                ? act.imageSnapshotPresent
-                : Array.isArray(act.images);
-            if (galleryPresent) {
-              const key = `quotation-gallery:${dayIndex + 1}:${activityIndex + 1}`;
-              const selected = await selectedSnapshotBytes(
-                Array.isArray(act.images) ? act.images : [],
-                textValue(act.pdfImageUrl),
+        // Each hotel stay owns an ordered snapshot. New Master-backed snapshots
+        // use immutable object keys; old bookmark snapshots keep their URLs. The
+        // linked live Master is consulted only for legacy rows with no snapshot.
+        const hotelDetailsRaw = version.hotelDetails as
+          | {
+              images?: unknown;
+              pdfImageUrl?: string | null;
+            }
+          | null
+          | undefined;
+        const stayImagesFor = (h: (typeof version.hotels)[number]): unknown => {
+          if (Array.isArray(h.images)) return h.images;
+          // Legacy: a single-bookmark quotation stored its gallery on hotelDetails.
+          // The section schema has historically defaulted to `images: []`, which
+          // means "no bookmark gallery" rather than an authoritative removal.
+          // Only a non-empty legacy section gallery may suppress the linked
+          // Hotel Master's established PDF fallback.
+          return Array.isArray(hotelDetailsRaw?.images) && hotelDetailsRaw.images.length > 0
+            ? hotelDetailsRaw.images
+            : undefined;
+        };
+        const legacyHotelIds = version.hotels
+          .filter((hotel) => !Array.isArray(stayImagesFor(hotel)))
+          .map((hotel) => hotel.hotelId)
+          .filter((id): id is string => Boolean(id));
+        const hotelImageMap = new Map<string, Buffer | null>();
+        if (legacyHotelIds.length) {
+          const hotelMasters = await prisma.hotel.findMany({
+            where: {
+              companyId: { in: masterOwnerCompanyIds },
+              id: { in: [...new Set(legacyHotelIds)] },
+              imageObjectKey: { not: null },
+              imageConfirmedAt: { not: null },
+            },
+            select: { id: true, imageObjectKey: true },
+          });
+          for (const hotel of hotelMasters)
+            hotelImageMap.set(hotel.id, await fetchImage(hotel.imageObjectKey));
+        }
+        const hotelImages = await Promise.all(
+          version.hotels.map(async (hotel) => {
+            const snapshot = stayImagesFor(hotel);
+            if (Array.isArray(snapshot))
+              return selectedSnapshotBytes(
+                snapshot,
+                hotel.pdfImageUrl ?? hotelDetailsRaw?.pdfImageUrl,
+                // Hotel bookmark URLs were already fetched by the legacy PDF
+                // path. New Master galleries always use quotation-owned keys.
+                true,
               );
-              if (selected) itineraryImageMap.set(key, selected);
-              // A gallery is authoritative even if its selected object is
-              // missing. Null the live Master/document fallbacks in this
-              // renderer-only copy so an old Master edit cannot leak through.
-              pdfActivities.push({
-                ...act,
-                imageUrl: key,
-                imageDocumentId: null,
-                sightseeingId: null,
-              });
-              continue;
+            return hotel.hotelId ? (hotelImageMap.get(hotel.hotelId) ?? null) : null;
+          }),
+        );
+
+        // Sightseeing activity images. Gallery snapshots are resolved per
+        // activity (not per Master id), so two rows linked to the same Master can
+        // independently reorder/remove/select their PDF image. A synthetic
+        // snapshot key feeds the existing renderer without persisting anything.
+        const sightseeingIds: string[] = [];
+        const itineraryDocumentIds: string[] = [];
+        const itineraryImageMap = new Map<string, Buffer>();
+        const ssData = version.sightseeingDetails as Record<string, unknown> | null;
+        if (ssData?.days && Array.isArray(ssData.days)) {
+          const pdfDays: Array<Record<string, unknown>> = [];
+          for (const [dayIndex, day] of (ssData.days as Array<Record<string, unknown>>).entries()) {
+            const acts = Array.isArray(day.activities)
+              ? (day.activities as Array<Record<string, unknown>>)
+              : [];
+            const pdfActivities: Array<Record<string, unknown>> = [];
+            for (const [activityIndex, act] of acts.entries()) {
+              const galleryPresent =
+                typeof act.imageSnapshotPresent === 'boolean'
+                  ? act.imageSnapshotPresent
+                  : Array.isArray(act.images);
+              if (galleryPresent) {
+                const key = `quotation-gallery:${dayIndex + 1}:${activityIndex + 1}`;
+                const selected = await selectedSnapshotBytes(
+                  Array.isArray(act.images) ? act.images : [],
+                  textValue(act.pdfImageUrl),
+                );
+                if (selected) itineraryImageMap.set(key, selected);
+                // A gallery is authoritative even if its selected object is
+                // missing. Null the live Master/document fallbacks in this
+                // renderer-only copy so an old Master edit cannot leak through.
+                pdfActivities.push({
+                  ...act,
+                  imageUrl: key,
+                  imageDocumentId: null,
+                  sightseeingId: null,
+                });
+                continue;
+              }
+              const sid = act.sightseeingId;
+              if (sid && typeof sid === 'string') sightseeingIds.push(sid);
+              const documentId = act.imageDocumentId;
+              if (documentId && typeof documentId === 'string')
+                itineraryDocumentIds.push(documentId);
+              const snapshotUrl = typeof act.imageUrl === 'string' ? act.imageUrl.trim() : '';
+              if (snapshotUrl) {
+                const snapshot = await fetchExternalImage(snapshotUrl);
+                if (snapshot) itineraryImageMap.set(snapshotUrl, snapshot);
+              }
+              pdfActivities.push(act);
             }
-            const sid = act.sightseeingId;
-            if (sid && typeof sid === 'string') sightseeingIds.push(sid);
-            const documentId = act.imageDocumentId;
-            if (documentId && typeof documentId === 'string') itineraryDocumentIds.push(documentId);
-            const snapshotUrl = typeof act.imageUrl === 'string' ? act.imageUrl.trim() : '';
-            if (snapshotUrl) {
-              const snapshot = await fetchExternalImage(snapshotUrl);
-              if (snapshot) itineraryImageMap.set(snapshotUrl, snapshot);
-            }
-            pdfActivities.push(act);
+            pdfDays.push({ ...day, activities: pdfActivities });
           }
-          pdfDays.push({ ...day, activities: pdfActivities });
+          pdfSightseeingDetails = { ...ssData, days: pdfDays };
         }
-        pdfSightseeingDetails = { ...ssData, days: pdfDays };
-      }
-      const sightseeingImageMap = new Map<string, Buffer | null>();
-      if (sightseeingIds.length) {
-        const uniqueIds = [...new Set(sightseeingIds)];
-        const ssMasters = await prisma.sightseeing.findMany({
-          where: {
-            companyId: { in: masterOwnerCompanyIds },
-            id: { in: uniqueIds },
-            imageObjectKey: { not: null },
-            imageConfirmedAt: { not: null },
-          },
-          select: { id: true, imageObjectKey: true },
-        });
-        for (const s of ssMasters) {
-          sightseeingImageMap.set(s.id, await fetchImage(s.imageObjectKey));
+        const sightseeingImageMap = new Map<string, Buffer | null>();
+        if (sightseeingIds.length) {
+          const uniqueIds = [...new Set(sightseeingIds)];
+          const ssMasters = await prisma.sightseeing.findMany({
+            where: {
+              companyId: { in: masterOwnerCompanyIds },
+              id: { in: uniqueIds },
+              imageObjectKey: { not: null },
+              imageConfirmedAt: { not: null },
+            },
+            select: { id: true, imageObjectKey: true },
+          });
+          for (const s of ssMasters) {
+            sightseeingImageMap.set(s.id, await fetchImage(s.imageObjectKey));
+          }
         }
-      }
-      const sightseeingImages = Object.fromEntries(sightseeingImageMap);
-      const itineraryImages = Object.fromEntries(itineraryImageMap);
-      const itineraryDocumentMap = new Map<string, Buffer>();
-      const imageDocumentsById = new Map(
-        quotation.documents
-          .filter(
-            (document) =>
-              document.status === 'AVAILABLE' &&
-              document.deletedAt === null &&
-              document.mimeType.startsWith('image/'),
-          )
-          .map((document) => [document.id, document]),
-      );
-      await Promise.all(
-        [...new Set(itineraryDocumentIds)].map(async (documentId) => {
-          const document = imageDocumentsById.get(documentId);
-          if (!document) return;
-          const image = await fetchImage(document.objectKey);
-          if (image) itineraryDocumentMap.set(documentId, image);
-        }),
-      );
-      const itineraryDocumentImages = Object.fromEntries(itineraryDocumentMap);
+        const sightseeingImages = Object.fromEntries(sightseeingImageMap);
+        const itineraryImages = Object.fromEntries(itineraryImageMap);
+        const itineraryDocumentMap = new Map<string, Buffer>();
+        const imageDocumentsById = new Map(
+          quotation.documents
+            .filter(
+              (document) =>
+                document.status === 'AVAILABLE' &&
+                document.deletedAt === null &&
+                document.mimeType.startsWith('image/'),
+            )
+            .map((document) => [document.id, document]),
+        );
+        await Promise.all(
+          [...new Set(itineraryDocumentIds)].map(async (documentId) => {
+            const document = imageDocumentsById.get(documentId);
+            if (!document) return;
+            const image = await fetchImage(document.objectKey);
+            if (image) itineraryDocumentMap.set(documentId, image);
+          }),
+        );
+        const itineraryDocumentImages = Object.fromEntries(itineraryDocumentMap);
 
-      // Vehicle/Cruise images: quotation snapshot first; the linked Master is
-      // a compatibility fallback only for pre-feature rows with no snapshot.
-      const serviceImageMap = new Map<string, Buffer | null>();
-      const vehicleIds = version.services
-        .filter((service) => service.vehicleId && !Array.isArray(service.images))
-        .map((s) => s.vehicleId as string);
-      const cruiseIds = version.services
-        .filter((service) => service.cruiseId && !Array.isArray(service.images))
-        .map((s) => s.cruiseId as string);
-      if (vehicleIds.length) {
-        const uniqueIds = [...new Set(vehicleIds)];
-        const vehicleMasters = await prisma.vehicle.findMany({
-          where: {
-            companyId: { in: masterOwnerCompanyIds },
-            id: { in: uniqueIds },
-            imageObjectKey: { not: null },
-            imageConfirmedAt: { not: null },
-          },
-          select: { id: true, imageObjectKey: true },
-        });
-        for (const v of vehicleMasters) {
-          serviceImageMap.set(v.id, await fetchImage(v.imageObjectKey));
+        // Vehicle/Cruise images: quotation snapshot first; the linked Master is
+        // a compatibility fallback only for pre-feature rows with no snapshot.
+        const serviceImageMap = new Map<string, Buffer | null>();
+        const vehicleIds = version.services
+          .filter((service) => service.vehicleId && !Array.isArray(service.images))
+          .map((s) => s.vehicleId as string);
+        const cruiseIds = version.services
+          .filter((service) => service.cruiseId && !Array.isArray(service.images))
+          .map((s) => s.cruiseId as string);
+        if (vehicleIds.length) {
+          const uniqueIds = [...new Set(vehicleIds)];
+          const vehicleMasters = await prisma.vehicle.findMany({
+            where: {
+              companyId: { in: masterOwnerCompanyIds },
+              id: { in: uniqueIds },
+              imageObjectKey: { not: null },
+              imageConfirmedAt: { not: null },
+            },
+            select: { id: true, imageObjectKey: true },
+          });
+          for (const v of vehicleMasters) {
+            serviceImageMap.set(v.id, await fetchImage(v.imageObjectKey));
+          }
         }
-      }
-      if (cruiseIds.length) {
-        const uniqueIds = [...new Set(cruiseIds)];
-        const cruiseMasters = await prisma.cruise.findMany({
-          where: {
-            companyId: { in: masterOwnerCompanyIds },
-            id: { in: uniqueIds },
-            imageObjectKey: { not: null },
-            imageConfirmedAt: { not: null },
-          },
-          select: { id: true, imageObjectKey: true },
-        });
-        for (const c of cruiseMasters) {
-          serviceImageMap.set(c.id, await fetchImage(c.imageObjectKey));
+        if (cruiseIds.length) {
+          const uniqueIds = [...new Set(cruiseIds)];
+          const cruiseMasters = await prisma.cruise.findMany({
+            where: {
+              companyId: { in: masterOwnerCompanyIds },
+              id: { in: uniqueIds },
+              imageObjectKey: { not: null },
+              imageConfirmedAt: { not: null },
+            },
+            select: { id: true, imageObjectKey: true },
+          });
+          for (const c of cruiseMasters) {
+            serviceImageMap.set(c.id, await fetchImage(c.imageObjectKey));
+          }
         }
-      }
-      const serviceImages = await Promise.all(
-        version.services.map(async (service) => {
-          if (Array.isArray(service.images))
-            return selectedSnapshotBytes(service.images, service.pdfImageUrl);
-          const masterId = service.vehicleId ?? service.cruiseId ?? null;
-          return masterId ? (serviceImageMap.get(masterId) ?? null) : null;
-        }),
-      );
+        const serviceImages = await Promise.all(
+          version.services.map(async (service) => {
+            if (Array.isArray(service.images))
+              return selectedSnapshotBytes(service.images, service.pdfImageUrl);
+            const masterId = service.vehicleId ?? service.cruiseId ?? null;
+            return masterId ? (serviceImageMap.get(masterId) ?? null) : null;
+          }),
+        );
 
-      // Airline logos: resolve from the flight segment airline IDs (stored on
-      // the quotation-version flight snapshot across every flight record),
-      // fetched via the shared cache.
-      const airlineImageMap = new Map<string, Buffer | null>();
-      const fd = normalizeFlightDetails(version.flightDetails) as {
-        include?: boolean;
-        entryMode?: 'MANUAL' | 'IMAGE';
-        imageDocumentId?: string | null;
-        images?: Array<{
-          documentId: string;
-          description?: string | null;
-          heading?: string | null;
-        }>;
-        flights?: Array<{
-          outbound?: { segments?: Array<{ airlineId?: string | null }> };
-          returnJourney?: { segments?: Array<{ airlineId?: string | null }> };
-        }>;
-      } | null;
-      const airlineIds = (fd?.flights ?? [])
-        .flatMap((flight) => [
-          ...(flight.outbound?.segments ?? []),
-          ...(flight.returnJourney?.segments ?? []),
-        ])
-        .map((s) => s.airlineId)
-        .filter((id): id is string => Boolean(id));
-      const uniqueAirlineIds = [...new Set(airlineIds)];
-      if (uniqueAirlineIds.length) {
-        const airlineMasters = await prisma.airline.findMany({
-          where: {
-            companyId: { in: masterOwnerCompanyIds },
-            id: { in: uniqueAirlineIds },
-            logoObjectKey: { not: null },
-            logoConfirmedAt: { not: null },
-          },
-          select: { id: true, logoObjectKey: true },
-        });
-        for (const a of airlineMasters) {
-          airlineImageMap.set(a.id, await fetchImage(a.logoObjectKey));
+        // Airline logos: resolve from the flight segment airline IDs (stored on
+        // the quotation-version flight snapshot across every flight record),
+        // fetched via the shared cache.
+        const airlineImageMap = new Map<string, Buffer | null>();
+        const fd = normalizeFlightDetails(version.flightDetails) as {
+          include?: boolean;
+          entryMode?: 'MANUAL' | 'IMAGE';
+          imageDocumentId?: string | null;
+          images?: Array<{
+            documentId: string;
+            description?: string | null;
+            heading?: string | null;
+          }>;
+          flights?: Array<{
+            outbound?: { segments?: Array<{ airlineId?: string | null }> };
+            returnJourney?: { segments?: Array<{ airlineId?: string | null }> };
+          }>;
+        } | null;
+        const airlineIds = (fd?.flights ?? [])
+          .flatMap((flight) => [
+            ...(flight.outbound?.segments ?? []),
+            ...(flight.returnJourney?.segments ?? []),
+          ])
+          .map((s) => s.airlineId)
+          .filter((id): id is string => Boolean(id));
+        const uniqueAirlineIds = [...new Set(airlineIds)];
+        if (uniqueAirlineIds.length) {
+          const airlineMasters = await prisma.airline.findMany({
+            where: {
+              companyId: { in: masterOwnerCompanyIds },
+              id: { in: uniqueAirlineIds },
+              logoObjectKey: { not: null },
+              logoConfirmedAt: { not: null },
+            },
+            select: { id: true, logoObjectKey: true },
+          });
+          for (const a of airlineMasters) {
+            airlineImageMap.set(a.id, await fetchImage(a.logoObjectKey));
+          }
         }
-      }
-      const airlineImages = Object.fromEntries(airlineImageMap);
-      let flightImage: Buffer | null = null;
-      const flightImages: Array<{ description?: string | null; image: Buffer; url?: string }> = [];
-      if (fd?.entryMode === 'IMAGE') {
-        const configuredImages = fd.images?.length
-          ? fd.images
-          : fd.imageDocumentId
-            ? [{ documentId: fd.imageDocumentId, description: null, heading: null }]
+        const airlineImages = Object.fromEntries(airlineImageMap);
+        let flightImage: Buffer | null = null;
+        const flightImages: Array<{ description?: string | null; image: Buffer; url?: string }> =
+          [];
+        if (fd?.entryMode === 'IMAGE') {
+          const configuredImages = fd.images?.length
+            ? fd.images
+            : fd.imageDocumentId
+              ? [{ documentId: fd.imageDocumentId, description: null, heading: null }]
+              : [];
+          const flightDocuments = configuredImages.length
+            ? await prisma.quotationDocument.findMany({
+                where: {
+                  id: { in: configuredImages.map((image) => image.documentId) },
+                  companyId: auth.companyId,
+                  quotationId: id,
+                  // Revisions intentionally retain the original flight-image document
+                  // IDs. The explicit document IDs plus company/quotation ownership
+                  // are the security boundary; requiring the document's original
+                  // version ID would make copied flight images disappear from PDFs.
+                  status: 'AVAILABLE',
+                  deletedAt: null,
+                  mimeType: { startsWith: 'image/' },
+                },
+                select: { id: true, objectKey: true, fileName: true },
+              })
             : [];
-        const flightDocuments = configuredImages.length
-          ? await prisma.quotationDocument.findMany({
-              where: {
-                id: { in: configuredImages.map((image) => image.documentId) },
-                companyId: auth.companyId,
-                quotationId: id,
-                // Revisions intentionally retain the original flight-image document
-                // IDs. The explicit document IDs plus company/quotation ownership
-                // are the security boundary; requiring the document's original
-                // version ID would make copied flight images disappear from PDFs.
-                status: 'AVAILABLE',
-                deletedAt: null,
-                mimeType: { startsWith: 'image/' },
-              },
-              select: { id: true, objectKey: true, fileName: true },
-            })
-          : [];
-        const documentsById = new Map(flightDocuments.map((document) => [document.id, document]));
-        for (const configuredImage of configuredImages) {
-          const document = documentsById.get(configuredImage.documentId);
-          const image = await fetchImage(document?.objectKey);
-          if (image) {
-            const url = document
-              ? await storageService
-                  .createDownloadUrl(document.objectKey, document.fileName, 604800, 'inline')
-                  .catch(() => undefined)
-              : undefined;
-            flightImages.push({
-              description: configuredImage.description ?? configuredImage.heading ?? null,
-              image,
-              ...(url ? { url } : {}),
-            });
+          const documentsById = new Map(flightDocuments.map((document) => [document.id, document]));
+          for (const configuredImage of configuredImages) {
+            const document = documentsById.get(configuredImage.documentId);
+            const image = await fetchImage(document?.objectKey);
+            if (image) {
+              const url = document
+                ? await storageService
+                    .createDownloadUrl(document.objectKey, document.fileName, 604800, 'inline')
+                    .catch(() => undefined)
+                : undefined;
+              flightImages.push({
+                description: configuredImage.description ?? configuredImage.heading ?? null,
+                image,
+                ...(url ? { url } : {}),
+              });
+            }
           }
+          flightImage = flightImages[0]?.image ?? null;
         }
-        flightImage = flightImages[0]?.image ?? null;
-      }
 
-      images = {
-        cover: coverImage,
-        hotels: hotelImages,
-        services: serviceImages,
-        sightseeing: sightseeingImages,
-        itinerary: itineraryImages,
-        itineraryDocuments: itineraryDocumentImages,
-        airlines: airlineImages,
-        flight: flightImage,
-        flights: flightImages,
-      };
-    } catch {
-      // Image resolution is best-effort; never block PDF generation.
-      images = undefined;
-    }
+        images = {
+          cover: coverImage,
+          hotels: hotelImages,
+          services: serviceImages,
+          sightseeing: sightseeingImages,
+          itinerary: itineraryImages,
+          itineraryDocuments: itineraryDocumentImages,
+          airlines: airlineImages,
+          flight: flightImage,
+          flights: flightImages,
+        };
+      } catch {
+        // Image resolution is best-effort; never block PDF generation.
+        images = undefined;
+      }
 
     if (options.style === 'STYLISH' && options.coverSource === 'UPLOAD') {
       const uploadedCover = await decodePdfCoverImage(options.coverImageDataUrl);
@@ -4010,8 +4143,7 @@ export const quotationsService = {
       }
     }
 
-    const renderer =
-      options.style === 'STYLISH' ? renderStylishQuotationPdf : renderQuotationPdf;
+    const renderer = options.style === 'STYLISH' ? renderStylishQuotationPdf : renderQuotationPdf;
 
     // Destination Expert — same resolved data the weblink uses, plus the
     // profile image bytes for the PDF (the weblink gets a signed URL instead).
@@ -4686,6 +4818,7 @@ export const quotationsService = {
     return previewDocumentForQuotation(
       quotation,
       `${await preferredPublicAppBaseUrl(quotation.companyId)}/q/${token}`,
+      await previewCompanyBranding(quotation.companyId),
     );
   },
 
@@ -4715,6 +4848,7 @@ export const quotationsService = {
     return previewDocumentForQuotation(
       quotation,
       `${await friendlyPublicSlugBaseUrl(quotation.companyId)}/${normalized}`,
+      await previewCompanyBranding(quotation.companyId),
     );
   },
 
@@ -4727,7 +4861,8 @@ export const quotationsService = {
       staffViewToken?: string | null;
       customDomainCompanyId?: string | null;
     },
-  ) {    // When the request arrives through an ACTIVE custom domain, the quotation
+  ) {
+    // When the request arrives through an ACTIVE custom domain, the quotation
     // must belong to that domain's company. A token is never exposed through
     // another tenant's custom domain — safe not-found behavior.
     if (options?.customDomainCompanyId && quotation.companyId !== options.customDomainCompanyId) {

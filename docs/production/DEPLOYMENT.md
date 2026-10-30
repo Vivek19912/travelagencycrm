@@ -124,6 +124,19 @@ pre-deploy database snapshot first (ROLLBACK.md).
   time; a concurrent run logs and exits 0. Do not schedule more frequently than
   a run typically takes.
 
+### 11a. Weblink PDF browser (headless Chromium)
+
+- The Weblink PDF style renders the real public quotation page in headless
+  Chromium (Playwright). Classic/Stylish need no browser; Weblink fails hard
+  without one, so every host that serves the API needs a compatible browser.
+- Containers already install it (`playwright install --with-deps chromium` in
+  `apps/api/Dockerfile`). On bare-metal/EC2 hosts install the pinned
+  Playwright Chromium plus OS libs, then verify with:
+  `npm run doctor:weblink-pdf --workspace @interscale/api`.
+  On distros Playwright does not support (e.g. Ubuntu 26.04 with old
+  Playwright), install the browser build matching the pinned driver revision
+  manually and provide the system libs via apt.
+
 ## 12. Health checks
 
 - **Liveness**: `GET /api/health` — no I/O, never depends on the database.

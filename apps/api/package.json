@@ -17,6 +17,7 @@
     "db:seed": "dotenv -e ../../.env -- tsx prisma/seed.ts",
     "db:studio": "dotenv -e ../../.env -- prisma studio",
     "db:reset": "dotenv -e ../../.env -- prisma migrate reset --force",
+    "doctor:weblink-pdf": "node scripts/weblink-pdf-preflight.cjs",
     "db:backfill-customers": "dotenv -e ../../.env -- tsx src/scripts/backfill-customers.ts",
     "db:backfill-search-api-keys": "dotenv -e ../../.env -- tsx src/scripts/backfill-search-api-keys.ts",
     "db:backfill-weblinks": "dotenv -e ../../.env -- tsx src/scripts/backfill-quotation-weblinks.ts",

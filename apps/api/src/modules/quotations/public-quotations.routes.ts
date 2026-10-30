@@ -34,6 +34,9 @@ router.get(
   optionalAuth,
   validateRequest({ params: slug }),
   asyncHandler(async (req, res) => {
+    // Short public cache: copy changes propagate quickly while crawlers
+    // reusing a URL (plus `?v=` cache-busting) keep working previews.
+    res.set('Cache-Control', 'public, max-age=600');
     res
       .status(200)
       .type('html')
@@ -103,6 +106,9 @@ router.get(
   optionalAuth,
   validateRequest({ params: token }),
   asyncHandler(async (req, res) => {
+    // Short public cache: copy changes propagate quickly while crawlers
+    // reusing a URL (plus `?v=` cache-busting) keep working previews.
+    res.set('Cache-Control', 'public, max-age=600');
     res
       .status(200)
       .type('html')
