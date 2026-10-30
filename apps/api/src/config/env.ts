@@ -140,11 +140,6 @@ const envSchema = z.object({
   ADD_ON_SERVICE_IMAGE_MAX_UPLOAD_SIZE_MB: intWithDefault(5),
   TESTIMONIAL_IMAGE_MAX_UPLOAD_SIZE_MB: intWithDefault(2),
   MASTER_MEDIA_PRESIGNED_URL_EXPIRY_SECONDS: intWithDefault(300),
-  // Social-unfurl (WhatsApp) preview images must stay fetchable long after the
-  // first scrape: crawlers revalidate rarely and presigned S3 URLs die at
-  // expiry. 7 days is the SigV4 maximum; the HTML itself carries a short
-  // Cache-Control so copy changes propagate while images stay stable.
-  OG_IMAGE_PRESIGNED_URL_EXPIRY_SECONDS: intWithDefault(604800),
   VENDOR_CONTRACT_EXPIRY_WARNING_DAYS: intWithDefault(30),
   REMINDER_WORKER_BATCH_SIZE: intWithDefault(100),
   REMINDER_WORKER_TIMEZONE_FALLBACK: z.string().min(1).default('Asia/Kolkata'),

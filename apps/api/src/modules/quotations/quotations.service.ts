@@ -51,7 +51,16 @@ import { validateMasterRefs, type RetainedMasterRefs } from './master-refs.servi
 import { resolveHotelRoomPricing } from './hotel-pricing-resolver.js';
 import { renderQuotationPdf, type QuotationPdfInput } from './pdf.service.js';
 import { renderStylishQuotationPdf } from './stylish-pdf.service.js';
-import { buildWeblinkPdfUrl, renderWeblinkPdfFromUrl, sanitizeWeblinkPdfError } from './weblink-browser-pdf.service.js';
+import {
+  buildWeblinkPdfUrl,
+  renderWeblinkPdfFromUrl,
+  sanitizeWeblinkPdfError,
+} from './weblink-browser-pdf.service.js';
+import {
+  buildQuotationPreviewHtml,
+  escapeHtml,
+  PREVIEW_FALLBACK_SITE_NAME,
+} from './quotation-preview-html.js';
 import {
   preferredPublicAppBaseUrl,
   friendlyPublicSlugBaseUrl,
@@ -2397,75 +2406,34 @@ async function createVersion(
   });
 }
 
-import {
-  asAbsoluteHttpsUrl,
-  buildQuotationPreviewHtml,
-  escapeHtml,
-} from './quotation-preview-html.js';
-
-const PREVIEW_TITLE_BASE = 'Personalized Travel Quotation';
-
 type PreviewCompanyBranding = {
   siteName: string;
-  imageUrl?: string | undefined;
-  imageAlt?: string | undefined;
-  imageMimeType?: string | undefined;
 };
 
 /**
- * Tenant branding for a quotation preview, resolved from the quotation's OWN
- * company — never the current session, never a global default. Returns the
- * company name with an absolute HTTPS logo URL when a confirmed logo exists
- * and a signed URL can be minted; otherwise name-only (no image tag at all —
- * a generic CRM logo must never stand in for a tenant).
+ * Tenant display name for a quotation preview, resolved from the quotation's
+ * OWN company — never the current session, never a global default. Returns
+ * null only when the company row itself is missing; callers fall back to the
+ * neutral placeholder. No logos are fetched: previews are text-only by policy.
  */
 async function previewCompanyBranding(companyId: string): Promise<PreviewCompanyBranding | null> {
   const company = await prisma.company.findUnique({
     where: { id: companyId },
-    select: {
-      name: true,
-      logoObjectKey: true,
-      logoConfirmedAt: true,
-      logoMimeType: true,
-    },
+    select: { name: true },
   });
   if (!company) return null;
-  let imageUrl: string | undefined;
-  if (company.logoObjectKey && company.logoConfirmedAt) {
-    try {
-      const signed = await storageService.createDownloadUrl(
-        company.logoObjectKey,
-        'logo',
-        env.OG_IMAGE_PRESIGNED_URL_EXPIRY_SECONDS,
-        'inline',
-      );
-      imageUrl = asAbsoluteHttpsUrl(signed);
-    } catch {
-      imageUrl = undefined;
-    }
-  }
-  return {
-    siteName: company.name,
-    imageUrl,
-    imageAlt: company.name,
-    imageMimeType: company.logoMimeType ?? undefined,
-  };
+  return { siteName: company.name };
 }
 
 function previewDocumentForQuotation(
-  quotation: { id?: unknown; companyId: string; query?: { customerName?: string | null } | null },
   canonicalUrl: string,
   branding: PreviewCompanyBranding | null,
 ): string {
-  const leadName = quotation.query?.customerName?.trim() || null;
-  const siteName = branding?.siteName ?? PREVIEW_TITLE_BASE;
+  const siteName = branding?.siteName ?? PREVIEW_FALLBACK_SITE_NAME;
   return buildQuotationPreviewHtml({
-    title: leadName ? `${siteName} – ${leadName}` : siteName,
+    title: siteName,
     canonicalUrl,
     siteName,
-    imageUrl: branding?.imageUrl,
-    imageAlt: branding?.imageAlt,
-    imageMimeType: branding?.imageMimeType,
   });
 }
 
@@ -4816,7 +4784,6 @@ export const quotationsService = {
       throw new NotFoundError('This quotation link is invalid or expired.');
     }
     return previewDocumentForQuotation(
-      quotation,
       `${await preferredPublicAppBaseUrl(quotation.companyId)}/q/${token}`,
       await previewCompanyBranding(quotation.companyId),
     );
@@ -4846,7 +4813,6 @@ export const quotationsService = {
       throw new NotFoundError('This quotation link is invalid or expired.');
     }
     return previewDocumentForQuotation(
-      quotation,
       `${await friendlyPublicSlugBaseUrl(quotation.companyId)}/${normalized}`,
       await previewCompanyBranding(quotation.companyId),
     );

@@ -1,65 +1,75 @@
 import { describe, expect, it } from 'vitest';
 import { buildQuotationPreviewHtml } from './quotation-preview-html.js';
 
-describe('quotation preview builder (unit, no DB)', () => {
-  it('emits company branding with absolute https image and no CRM strings', () => {
+const IMAGE_TOKENS = [
+  'og:image',
+  'og:image:secure_url',
+  'og:image:type',
+  'og:image:width',
+  'og:image:height',
+  'twitter:image',
+  'twitter:image:src',
+  'itemprop="image"',
+  'image_src',
+  'application/ld+json',
+];
+
+describe('quotation preview html (text-only, no DB)', () => {
+  it('emits company name, neutral description and canonical URL without images', () => {
     const html = buildQuotationPreviewHtml({
-      title: 'Canara Tales – Aarav Mehta',
-      canonicalUrl: 'https://quotation.canaratales.com/aarav-mehta',
+      title: 'Canara Tales',
+      canonicalUrl: 'https://quotation.canaratales.com/ganesh-v',
       siteName: 'Canara Tales',
-      imageUrl: 'https://cdn.test/logos/canara-tales.png?sig=abc',
-      imageAlt: 'Canara Tales',
-      imageMimeType: 'image/png',
     });
     expect(html).toContain('<meta property="og:title" content="Canara Tales">');
     expect(html).toContain('<meta property="og:site_name" content="Canara Tales">');
     expect(html).toContain(
-      '<meta property="og:image" content="https://cdn.test/logos/canara-tales.png?sig=abc">',
+      '<meta property="og:description" content="View your travel quotation.">',
     );
-    expect(html).toContain('<meta property="og:image:alt" content="Canara Tales">');
-    expect(html).toContain('<meta property="og:image:type" content="image/png">');
-    expect(html).toContain('<meta name="twitter:card" content="summary_large_image">');
-    expect(html).toContain('content="https://quotation.canaratales.com/aarav-mehta"');
+    expect(html).toContain('<meta property="og:type" content="website">');
+    expect(html).toContain(
+      '<meta property="og:url" content="https://quotation.canaratales.com/ganesh-v">',
+    );
+    expect(html).toContain('<meta name="twitter:card" content="summary">');
+    expect(html).toContain('<meta name="twitter:title" content="Canara Tales">');
+    for (const token of IMAGE_TOKENS) expect(html).not.toContain(token);
     expect(html).not.toContain('Travel Agency CRM');
     expect(html).not.toContain('multi-tenant');
-    expect(html).not.toContain('<script');
   });
 
-  it('omits image tags when there is no logo and escapes hostile names', () => {
+  it('ignores branding beyond the company name: never emits image metadata', () => {
     const html = buildQuotationPreviewHtml({
-      title: 'X',
+      title: 'Enfield Travels',
       canonicalUrl: 'https://yourquotation.in/x',
-      siteName: 'Evil <script>alert(1)</script> Travels',
+      siteName: 'Enfield Travels',
+      description: 'Custom description stays allowed.',
     });
-    expect(html).not.toContain('og:image');
+    for (const token of IMAGE_TOKENS) expect(html).not.toContain(token);
+    expect(html).toContain('content="Enfield Travels"');
+  });
+
+  it('falls back to neutral text when the company is unknown', () => {
+    const html = buildQuotationPreviewHtml({
+      title: 'x',
+      canonicalUrl: 'https://yourquotation.in/x',
+    });
+    expect(html).toContain('<meta property="og:title" content="Your Travel Quotation">');
+    expect(html).toContain(
+      '<meta property="og:description" content="View your travel quotation.">',
+    );
+    expect(html).not.toContain('Travel Agency CRM');
+  });
+
+  it('escapes hostile company names and canonical URLs', () => {
+    const html = buildQuotationPreviewHtml({
+      title: 'S',
+      canonicalUrl: 'https://yourquotation.in/x?a=1&b=2',
+      siteName: 'Evil <script>alert(1)</script> Travels',
+      description: 'Quote "special" <b>deal</b>',
+    });
     expect(html).not.toContain('<script>alert');
     expect(html).toContain('Evil &lt;script&gt;');
-    expect(html).toContain('<meta name="twitter:card" content="summary">');
-  });
-
-  it('rejects non-https image URLs', () => {
-    const absolute = buildQuotationPreviewHtml({
-      title: 'X',
-      canonicalUrl: 'https://yourquotation.in/x',
-      siteName: 'Local Dev',
-      imageUrl: 'http://localhost:3000/logo.png',
-    });
-    expect(absolute).not.toContain('og:image');
-    const relative = buildQuotationPreviewHtml({
-      title: 'X',
-      canonicalUrl: 'https://yourquotation.in/x',
-      siteName: 'Local Dev',
-      imageUrl: '/logo.png',
-    });
-    expect(relative).not.toContain('og:image');
-  });
-
-  it('keeps the canonical URL exactly and escapes it', () => {
-    const html = buildQuotationPreviewHtml({
-      title: 'T',
-      canonicalUrl: 'https://yourquotation.in/a-b?x=1&y=2',
-      siteName: 'S',
-    });
-    expect(html).toContain('content="https://yourquotation.in/a-b?x=1&amp;y=2"');
+    expect(html).toContain('a=1&amp;b=2');
+    expect(html).toContain('Quote &quot;special&quot; &lt;b&gt;deal&lt;/b&gt;');
   });
 });

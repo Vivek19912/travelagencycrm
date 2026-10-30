@@ -27,6 +27,33 @@ beforeEach(async () => {
   vi.restoreAllMocks();
 });
 
+const IMAGE_TOKENS = [
+  'og:image',
+  'og:image:secure_url',
+  'og:image:type',
+  'og:image:width',
+  'og:image:height',
+  'twitter:image',
+  'twitter:image:src',
+  'itemprop="image"',
+  'image_src',
+  'application/ld+json',
+  'cdn.test',
+  'memory://',
+];
+
+function expectTextOnlyPreview(res: { status: number; text: string }, companyName: string) {
+  expect(res.status).toBe(200);
+  expect(res.text).toContain(`<meta property="og:title" content="${companyName}">`);
+  expect(res.text).toContain(`<meta property="og:site_name" content="${companyName}">`);
+  expect(res.text).toContain(
+    '<meta property="og:description" content="View your travel quotation.">',
+  );
+  for (const token of IMAGE_TOKENS) expect(res.text).not.toContain(token);
+  expect(res.text).not.toContain('Travel Agency CRM');
+  expect(res.text).not.toContain('multi-tenant');
+}
+
 const leadPayload = (customerName: string) => ({
   customerName,
   phone: '+91 98765 43210',
@@ -75,208 +102,126 @@ async function createFinalizedQuotationWithSlug(
   return { quotationId: quotation.id, token, slug };
 }
 
-async function brandCompany(
-  companyId: string,
-  name: string,
-  opts: { logoKey?: string; confirmed?: boolean; mimeType?: string } = {},
-) {
-  const hasLogo = Boolean(opts.logoKey);
+async function brandCompany(companyId: string, name: string, withLogo = false) {
   await db.company.update({
     where: { id: companyId },
     data: {
       name,
-      logoObjectKey: opts.logoKey ?? null,
-      logoConfirmedAt: (opts.confirmed ?? hasLogo) ? new Date() : null,
-      logoMimeType: opts.mimeType ?? null,
+      ...(withLogo
+        ? {
+            logoObjectKey: 'companies/logo-test.png',
+            logoConfirmedAt: new Date(),
+            logoMimeType: 'image/png',
+          }
+        : {}),
     },
   });
 }
 
 const WHATSAPP_UA = 'WhatsApp/2.31.5.70 A (iPhone; iOS 17.4; Scale/3.00)';
 
-describe('tenant-specific quotation preview branding (integration)', () => {
-  it('Canara-style tenant receives its own name and logo, never platform branding', async () => {
-    const { client, companyId } = await ownerWithCompany('canara-brand');
-    await brandCompany(companyId, 'Canara Tales', {
-      logoKey: 'companies/logo-canara.png',
-      confirmed: true,
-      mimeType: 'image/png',
-    });
+describe('text-only quotation previews (no images, no CRM branding)', () => {
+  it('Canara-style tenant preview has company text and zero image metadata', async () => {
+    const { client, companyId } = await ownerWithCompany('canara-text');
+    await brandCompany(companyId, 'Canara Tales', true);
     await db.customDomain.create({
       data: { companyId, hostname: 'quotation.canaratales.test', status: 'ACTIVE' },
     });
-    const { slug } = await createFinalizedQuotationWithSlug(client, 'canara-slug-1', 'Vikas Singh');
-    vi.spyOn(storageService, 'createDownloadUrl').mockResolvedValue(
-      'https://cdn.test/logos/canara-tales.png',
-    );
-
+    const { slug } = await createFinalizedQuotationWithSlug(client, 'canara-text-slug-1');
+    const spy = vi.spyOn(storageService, 'createDownloadUrl');
     const res = await request(app)
       .get(`/api/public/quotations/by-slug/${slug}/preview`)
       .set('Host', 'quotation.canaratales.test');
-    expect(res.status).toBe(200);
+    expectTextOnlyPreview(res, 'Canara Tales');
+    expect(spy).not.toHaveBeenCalled();
     expect(res.headers['content-type']).toMatch(/html/);
-    expect(res.text).toContain('<meta property="og:title" content="Canara Tales">');
-    expect(res.text).toContain('<meta property="og:site_name" content="Canara Tales">');
-    expect(res.text).toContain(
-      '<meta property="og:image" content="https://cdn.test/logos/canara-tales.png">',
-    );
-    expect(res.text).toContain('<meta property="og:image:alt" content="Canara Tales">');
-    expect(res.text).not.toContain('Travel Agency CRM');
-    expect(res.text).not.toContain('Personalized Travel Quotation');
     expect(res.headers['cache-control']).toMatch(/public/);
   });
 
-  it('Travel-Enfield-style tenant receives different branding; tenants never cross', async () => {
-    const { client: clientA, companyId: companyA } = await ownerWithCompany('enfield-brand');
-    const { client: clientB, companyId: companyB } = await ownerWithCompany('other-brand');
-    await brandCompany(companyA, 'Travel Enfield', {
-      logoKey: 'companies/logo-enfield.png',
-      confirmed: true,
-    });
-    await brandCompany(companyB, 'Other Travels', {
-      logoKey: 'companies/logo-other.png',
-      confirmed: true,
-    });
+  it('Travel-Enfield-style tenant preview is text-only with its own name', async () => {
+    const { client, companyId } = await ownerWithCompany('enfield-text');
+    await brandCompany(companyId, 'Travel Enfield', true);
     await db.customDomain.create({
-      data: { companyId: companyA, hostname: 'quotation.enfield.test', status: 'ACTIVE' },
+      data: { companyId, hostname: 'quotation.enfield.test', status: 'ACTIVE' },
     });
-    await db.customDomain.create({
-      data: { companyId: companyB, hostname: 'quotation.other.test', status: 'ACTIVE' },
-    });
-    const { slug: slugA } = await createFinalizedQuotationWithSlug(clientA, 'enfield-slug-1');
-    const { slug: slugB } = await createFinalizedQuotationWithSlug(clientB, 'other-slug-1');
-    const spy = vi.spyOn(storageService, 'createDownloadUrl');
-    const logoFor = async (key: string) => `https://cdn.test/${encodeURIComponent(key)}`;
-    spy.mockImplementation(logoFor as unknown as typeof storageService.createDownloadUrl);
-
-    const resA = await request(app)
-      .get(`/api/public/quotations/by-slug/${slugA}/preview`)
+    const { slug } = await createFinalizedQuotationWithSlug(client, 'enfield-text-slug-1');
+    const res = await request(app)
+      .get(`/api/public/quotations/by-slug/${slug}/preview`)
       .set('Host', 'quotation.enfield.test');
-    const resB = await request(app)
-      .get(`/api/public/quotations/by-slug/${slugB}/preview`)
-      .set('Host', 'quotation.other.test');
-    expect(resA.text).toContain('content="Travel Enfield"');
-    expect(resA.text).not.toContain('Other Travels');
-    expect(resB.text).toContain('content="Other Travels"');
-    expect(resB.text).not.toContain('Travel Enfield');
-    expect(resA.text).not.toContain('logo-other');
-    expect(resB.text).not.toContain('logo-enfield');
+    expectTextOnlyPreview(res, 'Travel Enfield');
+  });
 
+  it('Trip-My-Buddy-style tenant preview is text-only with its own name', async () => {
+    const { client, companyId } = await ownerWithCompany('tmb-text');
+    await brandCompany(companyId, 'Trip My Buddy');
+    const { slug } = await createFinalizedQuotationWithSlug(client, 'tmb-text-slug-1');
+    const res = await request(app)
+      .get(`/api/public/quotations/by-slug/${slug}/preview`)
+      .set('Host', 'yourquotation.in');
+    expectTextOnlyPreview(res, 'Trip My Buddy');
+  });
+
+  it('tenants never cross: enfield host cannot preview other tenant slugs', async () => {
+    const { companyId: companyA } = await ownerWithCompany('cross-a');
+    const { client: clientB, companyId: companyB } = await ownerWithCompany('cross-b');
+    await brandCompany(companyA, 'Cross Alpha');
+    await brandCompany(companyB, 'Cross Beta');
+    await db.customDomain.create({
+      data: { companyId: companyA, hostname: 'quotation.crossa.test', status: 'ACTIVE' },
+    });
+    const { slug: slugB } = await createFinalizedQuotationWithSlug(clientB, 'cross-beta-slug-1');
     const cross = await request(app)
       .get(`/api/public/quotations/by-slug/${slugB}/preview`)
-      .set('Host', 'quotation.enfield.test');
+      .set('Host', 'quotation.crossa.test');
     expect(cross.status).toBe(404);
+    expect(cross.text).not.toContain('Cross Beta');
+    expect(cross.text).not.toContain('Cross Alpha');
   });
 
   it('custom-domain canonical URL uses the custom hostname', async () => {
-    const { client, companyId } = await ownerWithCompany('canon-brand');
+    const { client, companyId } = await ownerWithCompany('canon-text');
     await brandCompany(companyId, 'Canon Travels');
     await db.customDomain.create({
       data: { companyId, hostname: 'quotation.canon.test', status: 'ACTIVE' },
     });
-    const { slug } = await createFinalizedQuotationWithSlug(client, 'canon-slug-1');
+    const { slug } = await createFinalizedQuotationWithSlug(client, 'canon-text-slug-1');
     const res = await request(app)
       .get(`/api/public/quotations/by-slug/${slug}/preview`)
       .set('Host', 'quotation.canon.test');
     expect(res.status).toBe(200);
     expect(res.text).toContain(`content="https://quotation.canon.test/${slug}"`);
+    expectTextOnlyPreview(res, 'Canon Travels');
   });
 
-  it('missing logo yields name-only metadata with no image tag', async () => {
-    const { client, companyId } = await ownerWithCompany('nologo-brand');
-    await brandCompany(companyId, 'No Logo Travels');
-    const { slug } = await createFinalizedQuotationWithSlug(client, 'nologo-slug-1');
+  it('even a confirmed company logo in the database never reaches the preview', async () => {
+    const { client, companyId } = await ownerWithCompany('logoignored');
+    await brandCompany(companyId, 'Logo Ignored Travels', true);
+    const { slug } = await createFinalizedQuotationWithSlug(client, 'logoignored-slug-1');
     const spy = vi.spyOn(storageService, 'createDownloadUrl');
     const res = await request(app)
       .get(`/api/public/quotations/by-slug/${slug}/preview`)
       .set('Host', 'yourquotation.in');
-    expect(res.status).toBe(200);
-    expect(res.text).toContain('content="No Logo Travels"');
-    expect(res.text).not.toContain('og:image');
+    expectTextOnlyPreview(res, 'Logo Ignored Travels');
     expect(spy).not.toHaveBeenCalled();
-    expect(res.text).not.toContain('Travel Agency CRM');
-  });
-
-  it('unconfirmed logo is treated as missing', async () => {
-    const { client, companyId } = await ownerWithCompany('unconfirmed-brand');
-    await db.company.update({
-      where: { id: companyId },
-      data: {
-        name: 'Unconfirmed Travels',
-        logoObjectKey: 'companies/logo-pending.png',
-        logoConfirmedAt: null,
-      },
-    });
-    const { slug } = await createFinalizedQuotationWithSlug(client, 'unconfirmed-slug-1');
-    const spy = vi.spyOn(storageService, 'createDownloadUrl');
-    const res = await request(app)
-      .get(`/api/public/quotations/by-slug/${slug}/preview`)
-      .set('Host', 'yourquotation.in');
-    expect(res.status).toBe(200);
-    expect(res.text).not.toContain('og:image');
-    expect(spy).not.toHaveBeenCalled();
-  });
-
-  it('storage failure degrades to name-only metadata without breaking', async () => {
-    const { client, companyId } = await ownerWithCompany('failbrand');
-    await brandCompany(companyId, 'Flaky Logo Travels', {
-      logoKey: 'companies/logo-flaky.png',
-      confirmed: true,
-    });
-    const { slug } = await createFinalizedQuotationWithSlug(client, 'failbrand-slug-1');
-    vi.spyOn(storageService, 'createDownloadUrl').mockRejectedValue(new Error('S3 down'));
-    const res = await request(app)
-      .get(`/api/public/quotations/by-slug/${slug}/preview`)
-      .set('Host', 'yourquotation.in');
-    expect(res.status).toBe(200);
-    expect(res.text).toContain('content="Flaky Logo Travels"');
-    expect(res.text).not.toContain('og:image');
-  });
-
-  it('non-https storage URLs are never emitted', async () => {
-    const { client, companyId } = await ownerWithCompany('memorybrand');
-    await brandCompany(companyId, 'Memory Logo Travels', {
-      logoKey: 'companies/logo-mem.png',
-      confirmed: true,
-    });
-    await storageService.putObject({
-      key: 'companies/logo-mem.png',
-      body: Buffer.from('fake-png'),
-      contentType: 'image/png',
-    });
-    const { slug } = await createFinalizedQuotationWithSlug(client, 'memory-slug-1');
-    const res = await request(app)
-      .get(`/api/public/quotations/by-slug/${slug}/preview`)
-      .set('Host', 'yourquotation.in');
-    expect(res.status).toBe(200);
-    expect(res.text).toContain('content="Memory Logo Travels"');
-    expect(res.text).not.toContain('og:image');
-    expect(res.text).not.toContain('memory://');
   });
 
   it('invalid slug returns generic 404 without company details', async () => {
-    const { companyId } = await ownerWithCompany('invalidslug');
-    await brandCompany(companyId, 'Secret Travels', {
-      logoKey: 'companies/logo-secret.png',
-      confirmed: true,
-    });
+    const { companyId } = await ownerWithCompany('invalidslug2');
+    await brandCompany(companyId, 'Secret Travels', true);
     await db.customDomain.create({
-      data: { companyId, hostname: 'quotation.secret.test', status: 'ACTIVE' },
+      data: { companyId, hostname: 'quotation.secret2.test', status: 'ACTIVE' },
     });
     const res = await request(app)
       .get('/api/public/quotations/by-slug/no-such-slug-xyz/preview')
-      .set('Host', 'quotation.secret.test');
+      .set('Host', 'quotation.secret2.test');
     expect(res.status).toBe(404);
     expect(res.text).not.toContain('Secret Travels');
   });
 
   it('deleted and revoked quotations are not exposed', async () => {
-    const { client, companyId } = await ownerWithCompany('privatebrand');
+    const { client, companyId } = await ownerWithCompany('privatebrand2');
     await brandCompany(companyId, 'Private Travels');
-    const { slug, quotationId } = await createFinalizedQuotationWithSlug(
-      client,
-      'private-slug-1',
-    );
+    const { slug, quotationId } = await createFinalizedQuotationWithSlug(client, 'private-slug-2');
     await db.quotation.update({ where: { id: quotationId }, data: { deletedAt: new Date() } });
     const gone = await request(app)
       .get(`/api/public/quotations/by-slug/${slug}/preview`)
@@ -284,12 +229,12 @@ describe('tenant-specific quotation preview branding (integration)', () => {
     expect(gone.status).toBe(404);
     expect(gone.text).not.toContain('Private Travels');
 
-    const { client: client2, companyId: companyId2 } = await ownerWithCompany('revokebrand');
+    const { client: client2, companyId: companyId2 } = await ownerWithCompany('revokebrand2');
     await brandCompany(companyId2, 'Revoked Travels');
-    const revoked = await createFinalizedQuotationWithSlug(client2, 'revoked-slug-1');
+    const revoked = await createFinalizedQuotationWithSlug(client2, 'revoked-slug-2');
     await client2.delete(`/api/quotations/${revoked.quotationId}/public-link`);
     const goneSlug = await request(app)
-      .get(`/api/public/quotations/by-slug/revoked-slug-1/preview`)
+      .get(`/api/public/quotations/by-slug/revoked-slug-2/preview`)
       .set('Host', 'yourquotation.in');
     expect(goneSlug.status).toBe(404);
     const goneToken = await request(app)
@@ -300,15 +245,9 @@ describe('tenant-specific quotation preview branding (integration)', () => {
   });
 
   it('WhatsApp crawler user agent receives identical server-rendered HTML', async () => {
-    const { client, companyId } = await ownerWithCompany('crawlerbrand');
-    await brandCompany(companyId, 'Crawler Travels', {
-      logoKey: 'companies/logo-crawl.png',
-      confirmed: true,
-    });
-    const { slug } = await createFinalizedQuotationWithSlug(client, 'crawler-slug-1');
-    vi.spyOn(storageService, 'createDownloadUrl').mockResolvedValue(
-      'https://cdn.test/logos/crawl.png',
-    );
+    const { client, companyId } = await ownerWithCompany('crawlerbrand2');
+    await brandCompany(companyId, 'Crawler Travels', true);
+    const { slug } = await createFinalizedQuotationWithSlug(client, 'crawler-slug-2');
     const asBot = await request(app)
       .get(`/api/public/quotations/by-slug/${slug}/preview`)
       .set('Host', 'yourquotation.in')
@@ -323,29 +262,21 @@ describe('tenant-specific quotation preview branding (integration)', () => {
     expect(asBot.headers['content-type']).toMatch(/html/);
   });
 
-  it('token weblink preview carries tenant branding on the platform base', async () => {
-    const { client, companyId } = await ownerWithCompany('tokenbrand');
-    await brandCompany(companyId, 'Token Travels', {
-      logoKey: 'companies/logo-token.png',
-      confirmed: true,
-    });
-    const { token } = await createFinalizedQuotationWithSlug(client, 'token-slug-unused');
-    vi.spyOn(storageService, 'createDownloadUrl').mockResolvedValue(
-      'https://cdn.test/logos/token.png',
-    );
+  it('token weblink preview carries tenant name on the platform base, no images', async () => {
+    const { client, companyId } = await ownerWithCompany('tokenbrand2');
+    await brandCompany(companyId, 'Token Travels', true);
+    const { token } = await createFinalizedQuotationWithSlug(client, 'token-slug-unused-2');
     const res = await request(app)
       .get(`/api/public/quotations/${token}/preview`)
       .set('Host', 'app.travelagencycrm.in');
-    expect(res.status).toBe(200);
-    expect(res.text).toContain('content="Token Travels"');
-    expect(res.text).toContain('og:image');
-    expect(res.text).not.toContain('Travel Agency CRM');
+    expectTextOnlyPreview(res, 'Token Travels');
+    for (const token2 of ['og:image']) expect(res.text).not.toContain(token2);
   });
 
   it('cache-busting query keeps working previews and short public cache', async () => {
-    const { client, companyId } = await ownerWithCompany('cachebrand');
+    const { client, companyId } = await ownerWithCompany('cachebrand2');
     await brandCompany(companyId, 'Cache Travels');
-    const { slug } = await createFinalizedQuotationWithSlug(client, 'cache-slug-1');
+    const { slug } = await createFinalizedQuotationWithSlug(client, 'cache-slug-2');
     const plain = await request(app)
       .get(`/api/public/quotations/by-slug/${slug}/preview`)
       .set('Host', 'yourquotation.in');
@@ -355,24 +286,20 @@ describe('tenant-specific quotation preview branding (integration)', () => {
     expect(busted.status).toBe(200);
     expect(busted.text).toBe(plain.text);
     expect(busted.headers['cache-control']).toMatch(/public/);
-    expect(busted.text).toContain('content="Cache Travels"');
+    expectTextOnlyPreview(busted, 'Cache Travels');
   });
 
-  it('browser JSON weblink path is unchanged', async () => {
-    const { client, companyId } = await ownerWithCompany('jsonbrand');
-    await brandCompany(companyId, 'Json Travels', {
-      logoKey: 'companies/logo-json.png',
-      confirmed: true,
-    });
-    const { slug } = await createFinalizedQuotationWithSlug(client, 'json-slug-1');
-    vi.spyOn(storageService, 'createDownloadUrl').mockResolvedValue(
-      'https://cdn.test/logos/json.png',
-    );
+  it('browser JSON weblink path is unchanged and still serves company branding', async () => {
+    const { client, companyId } = await ownerWithCompany('jsonbrand2');
+    await brandCompany(companyId, 'Json Travels', true);
+    const { slug } = await createFinalizedQuotationWithSlug(client, 'json-slug-2');
     const res = await request(app)
       .get(`/api/public/quotations/by-slug/${slug}`)
       .set('Host', 'yourquotation.in');
     expect(res.status).toBe(200);
     expect(res.body.data.quotation.quotationNumber).toBeDefined();
     expect(res.body.data.quotation.companyId).toBe(companyId);
+    expect(res.body.data.company.name).toBe('Json Travels');
+    expect(typeof res.body.data.company.logoUrl).toBe('string');
   });
 });
