@@ -4411,6 +4411,10 @@ export function QuotationBuilderPage() {
       presentHotelIds.add(defaultHotel.id);
     };
     rows.forEach((row, index) => {
+      // Manually inserted stays (Add Hotel Before/After) stay blank until the
+      // user explicitly selects a hotel — never auto-filled with a default.
+      if ((row as unknown as { skipAutoHotelPrefill?: boolean })?.skipAutoHotelPrefill)
+        return;
       if (!isHotelRowEmpty(row)) return;
       const cityName = resolveHotelRowCity(row, fallbackCity);
       if (!cityName) return;
@@ -4661,26 +4665,25 @@ export function QuotationBuilderPage() {
   };
 
   /**
-   * Add Hotel Before/After: a blank, independent stay that inherits only the
-   * neighbouring stay's destination/city. Inheriting the city lets the default
-   * prefill resolve the right destination; the hotel itself is never cloned.
+   * Add Hotel Before/After: a completely blank, independent stay. No city is
+   * inherited from the neighbour and no hotel data is cloned — the row starts
+   * with empty hotel name/id, no images, no rooms, no meal plans, no dates
+   * and no pricing. The `skipAutoHotelPrefill` marker opts this row out of
+   * the automatic default-hotel effect below so it stays blank until the user
+   * explicitly selects a hotel (initial-quotation prefill is unchanged).
    */
-  const neighbourHotelCity = (index: number) =>
-    ((watchedHotels?.[index] as HotelInputRow | undefined)?.city ?? '').trim() ||
-    hotelDefaultCity;
+  const createManualHotelStay = (sequence: number): HotelInputRow =>
+    ({
+      ...createEmptyHotelStay(sequence, true, { city: '' }),
+      skipAutoHotelPrefill: true,
+    }) as unknown as HotelInputRow;
 
   const insertHotelAfter = (index: number) => {
-    hotels.insert(
-      index + 1,
-      createEmptyHotelStay(index + 2, true, { city: neighbourHotelCity(index) }),
-    );
+    hotels.insert(index + 1, createManualHotelStay(index + 2));
   };
 
   const insertHotelBefore = (index: number) => {
-    hotels.insert(
-      index,
-      createEmptyHotelStay(index + 1, true, { city: neighbourHotelCity(index) }),
-    );
+    hotels.insert(index, createManualHotelStay(index + 1));
   };
 
   const estimate = useMemo(() => {
@@ -5073,20 +5076,26 @@ export function QuotationBuilderPage() {
             .map((hotel, index) => {
               // Untouched default allocations are dropped; partially filled
               // ones are kept so validation reports the exact room number.
-              const roomLines = (hotel.roomLines ?? []).filter(roomLineHasData);
-              const mealPlanLines = (hotel.mealPlanLines ?? []).filter(mealLineHasData);
+              // `skipAutoHotelPrefill` is a client-only marker for Add Hotel
+              // Before/After rows — never persisted.
+              const { skipAutoHotelPrefill: _skipAutoHotelPrefill, ...hotelData } = hotel as unknown as Record<string, unknown> as HotelInputRow & {
+                skipAutoHotelPrefill?: boolean;
+              };
+              void _skipAutoHotelPrefill;
+              const roomLines = (hotelData.roomLines ?? []).filter(roomLineHasData);
+              const mealPlanLines = (hotelData.mealPlanLines ?? []).filter(mealLineHasData);
               const firstRoom = roomLines[0];
               const firstMeal = mealPlanLines[0];
               return {
-                ...hotel,
+                ...hotelData,
                 // Persist the calendar-date-derived nights whenever valid dates
                 // exist, so re-saving repairs historical incorrect night counts.
                 // Stay dates are optional: with either date missing the snapshot
                 // keeps NULL (unknown) — never 0, which fails validation, and
                 // never a stale count from previously cleared dates.
                 nights:
-                  hotelStayNights(hotel.checkInDate, hotel.checkOutDate) ??
-                  (typeof hotel.nights === 'number' && hotel.nights > 0 ? hotel.nights : null),
+                  hotelStayNights(hotelData.checkInDate, hotelData.checkOutDate) ??
+                  (typeof hotelData.nights === 'number' && hotelData.nights > 0 ? hotelData.nights : null),
                 roomLines,
                 mealPlanLines,
                 // Mirror the first allocation onto the legacy scalar columns so
@@ -5100,7 +5109,7 @@ export function QuotationBuilderPage() {
                       // Persist the displayed total: the manual override when
                       // one exists, otherwise the live allocation sum.
                       rooms:
-                        resolveHotelRooms(hotels.fields[index]?.id, hotel).value ??
+                        resolveHotelRooms(hotels.fields[index]?.id, hotelData).value ??
                         roomLines.reduce((sum, line) => sum + (Number(line.rooms) || 1), 0),
                       extraBedQuantity: firstRoom?.extraBedQuantity ?? null,
                       extraBedPrice: firstRoom?.extraBedPrice ?? null,
