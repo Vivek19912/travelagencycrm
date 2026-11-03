@@ -19,12 +19,24 @@ import {
  * user's own company — never the integration credential's company, never
  * the WACRM lead's "Assigned To".
  *
+ * CRM User Mapping: the payload may additionally carry
+ * `assignedToUserId` — a Travel CRM user id previously mapped to the
+ * creating WACRM user. When present, the lead is assigned to THAT user
+ * instead of the owner-email user, provided the mapped user is ACTIVE,
+ * non-deleted, and in the SAME company as the owner-email user;
+ * otherwise creation fails with ASSIGNED_USER_NOT_FOUND so WACRM can
+ * fall back to the owner. The mapped id is never a tenant override:
+ * the company still derives exclusively from the owner email.
+ *
  * Flow per request (idempotency key = owner company + wacrmAccountId +
  * flowRunId):
  *   1. resolve `assignedToEmail` (the WACRM workspace owner) to an
  *      ACTIVE, non-deleted Travel CRM user by normalized email across
  *      the whole database — no match fails closed with
  *      ASSIGNED_USER_NOT_FOUND (no fallback, no auto-created user);
+ *   1b. when `assignedToUserId` is present, resolve it to an ACTIVE,
+ *      non-deleted user in the SAME company — no match fails closed
+ *      with ASSIGNED_USER_NOT_FOUND so WACRM can retry unmapped;
  *   2. look up the link row keyed by the OWNER's company — a stored
  *      queryId returns the existing lead without creating;
  *   3. otherwise claim a `pending` row first (unique constraint
@@ -32,7 +44,8 @@ import {
  *      crashed attempt is a 409, never a silent duplicate);
  *   4. delegate to `queriesService.create` (same validation,
  *      transaction, histories, and audit as the UI path) in the
- *      owner's company, assigned to that owner user;
+ *      owner's company, assigned to the mapped user when provided,
+ *      else the owner user;
  *   5. mark the link `created` with the real query id (failures
  *      mark it `failed` with the reason and rethrow).
  *
@@ -44,6 +57,16 @@ export class AssigneeNotFoundError extends AppError {
   constructor(email: string) {
     super(
       `No assignable Travel CRM user matches email "${email}".`,
+      400,
+      ERROR_CODES.ASSIGNED_USER_NOT_FOUND,
+    );
+  }
+}
+
+export class AssigneeIdNotFoundError extends AppError {
+  constructor(userId: string) {
+    super(
+      `No assignable Travel CRM user matches id "${userId}" in the linked account.`,
       400,
       ERROR_CODES.ASSIGNED_USER_NOT_FOUND,
     );
@@ -140,8 +163,8 @@ async function itineraryDestinationFeed(companyId: string): Promise<ItineraryDes
 }
 
 /**
- * Resolve the company whose itinerary master data a WACRM lookups
- * request must see.
+ * Resolve the company whose tenant-scoped data a WACRM lookups
+ * request must see (assignable salespeople AND itinerary masters).
  *
  * The Bearer credential authenticates the WACRM integration, while
  * the `assignedToEmail` locator — resolved server-side by WACRM from
@@ -149,12 +172,13 @@ async function itineraryDestinationFeed(companyId: string): Promise<ItineraryDes
  * the Travel CRM account a WACRM workspace is linked to. When a
  * shared integration secret is bound to one company but the calling
  * workspace belongs to another, scoping by the credential alone would
- * leak one customer's master data to another; the locator re-scopes
- * the feed to the linked company so each workspace receives only its
- * own destinations/cities. The locator is honored only when it
- * resolves to exactly one non-deleted Travel CRM user; anything else
- * falls back to the credential's company (never guesses, never fails
- * hard, never crosses the credential's own company silently).
+ * leak one customer's users AND master data to another; the locator
+ * re-scopes both feeds to the linked company so each workspace
+ * receives only its own salespeople, destinations, and cities. The
+ * locator is honored only when it resolves to exactly one
+ * non-deleted Travel CRM user; anything else falls back to the
+ * credential's company (never guesses, never fails hard, never
+ * crosses the credential's own company silently).
  */
 async function resolveItineraryScopeCompany(
   auth: AuthContext,
@@ -224,6 +248,31 @@ export const wacrmService = {
       throw new AssigneeNotFoundError(input.assignedToEmail.trim());
     }
     const companyId = ownerUser.companyId;
+    // CRM User Mapping override: when WACRM supplies a mapped salesperson
+    // id, assign to that user — but ONLY inside the owner-email company.
+    // A cross-company, inactive, or deleted id fails closed with
+    // ASSIGNED_USER_NOT_FOUND (same code as the email path) so WACRM can
+    // retry with the owner and never silently mis-assign the lead.
+    let assigneeUserId = ownerUser.id;
+    const mappedUserId =
+      typeof input.assignedToUserId === 'string' && input.assignedToUserId.trim()
+        ? input.assignedToUserId.trim()
+        : null;
+    if (mappedUserId) {
+      const mappedUser = await prisma.user.findFirst({
+        where: {
+          id: mappedUserId,
+          companyId,
+          status: 'ACTIVE',
+          deletedAt: null,
+        },
+        select: { id: true },
+      });
+      if (!mappedUser) {
+        throw new AssigneeIdNotFoundError(mappedUserId);
+      }
+      assigneeUserId = mappedUser.id;
+    }
     // Lead creation runs in the OWNER's company as the owner user (the
     // credential only authenticates the WACRM integration; it never
     // determines the tenant or the actor for the created lead).
@@ -298,7 +347,7 @@ export const wacrmService = {
         leadSource: input.leadSource,
         leadType: input.leadType,
         leadStage: input.leadStage,
-        assignedToId: ownerUser.id,
+        assignedToId: assigneeUserId,
         dateOfBirth: input.dateOfBirth ?? undefined,
         travelStartDate: input.travelStartDate ?? undefined,
         // Month-based timing (optional pair, validated by the
@@ -340,8 +389,13 @@ export const wacrmService = {
   },
 
   async lookups(auth: AuthContext, ownerEmail: string | null = null) {
-    const base = await queriesService.lookups(auth);
+    // Tenant scoping FIRST: every user-facing list below (assignable
+    // salespeople AND the itinerary master feed) is read from the
+    // locator-resolved company. The credential's company is only the
+    // fallback when the locator is absent or ambiguous — it must never
+    // leak another tenant's users into this workspace's dropdowns.
     const scopeCompanyId = await resolveItineraryScopeCompany(auth, ownerEmail);
+    const base = await queriesService.lookups(auth, { companyId: scopeCompanyId });
     const feed = await itineraryDestinationFeed(scopeCompanyId);
     return {
       ...base,

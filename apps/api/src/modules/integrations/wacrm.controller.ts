@@ -38,10 +38,11 @@ export const integrationsController = {
   async wacrmLookups(req: Request, res: Response) {
     // The `assignedToEmail` query locator identifies the linked Travel
     // CRM account for the calling WACRM workspace (resolved server-side
-    // by WACRM, never free-form). It re-scopes the itinerary feed so a
-    // shared integration secret never surfaces another account's master
-    // data. Absent/unresolvable locators fall back to the credential's
-    // company inside the service.
+    // by WACRM, never free-form). It re-scopes the assignable-users
+    // list AND the itinerary feed so a shared integration secret never
+    // surfaces another account's users or master data. Absent/
+    // unresolvable locators fall back to the credential's company
+    // inside the service.
     const rawEmail = (req.query ?? {}).assignedToEmail;
     const ownerEmail =
       typeof rawEmail === 'string' && rawEmail.trim() ? rawEmail.trim() : null;

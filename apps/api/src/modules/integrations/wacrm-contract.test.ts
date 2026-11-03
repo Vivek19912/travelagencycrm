@@ -106,3 +106,44 @@ describe('wacrm month/year travel timing (Phase 2A)', () => {
     expect(wacrmLeadPayloadSchema.safeParse(noTiming).success).toBe(true);
   });
 });
+
+describe('wacrm CRM User Mapping assignee id', () => {
+  const SALES_ID = '33333333-3333-4333-8333-333333333333';
+
+  it('accepts an absent assignedToUserId (owner-email assignment unchanged)', () => {
+    const result = wacrmLeadPayloadSchema.safeParse(base());
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.assignedToUserId).toBeUndefined();
+  });
+
+  it('accepts a valid mapped salesperson uuid', () => {
+    const result = wacrmLeadPayloadSchema.safeParse(
+      base({ assignedToUserId: SALES_ID }),
+    );
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.assignedToUserId).toBe(SALES_ID);
+  });
+
+  it('accepts explicit null (unmapped caller falls back to the owner)', () => {
+    const result = wacrmLeadPayloadSchema.safeParse(
+      base({ assignedToUserId: null }),
+    );
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.assignedToUserId).toBeNull();
+  });
+
+  it('rejects a non-uuid assignedToUserId', () => {
+    expect(
+      wacrmLeadPayloadSchema.safeParse(base({ assignedToUserId: 'not-a-uuid' }))
+        .success,
+    ).toBe(false);
+  });
+
+  it('trims a padded uuid', () => {
+    const result = wacrmLeadPayloadSchema.safeParse(
+      base({ assignedToUserId: `  ${SALES_ID}  ` }),
+    );
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.assignedToUserId).toBe(SALES_ID);
+  });
+});

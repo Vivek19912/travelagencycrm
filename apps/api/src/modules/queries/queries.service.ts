@@ -854,17 +854,27 @@ export const queriesService = {
       orderBy: { createdAt: 'desc' },
     });
   },
-  async lookups(auth: AuthContext) {
+  async lookups(auth: AuthContext, opts: { companyId?: string } = {}) {
+    // Mapping-dropdown select: same tenant filter as everywhere else,
+    // plus the email so external mapping UIs can display and
+    // disambiguate same-name salespeople. The shared `userSelect` is
+    // left untouched (it feeds assignment histories and detail views).
+    //
+    // The company defaults to the caller's tenant; the WACRM
+    // integration passes the locator-resolved company so a shared
+    // integration secret never leaks another tenant's users.
+    const companyId = opts.companyId ?? auth.companyId;
+    const mappingUserSelect = { ...userSelect, email: true } as const;
     const users = await prisma.user.findMany({
       where: {
-        companyId: auth.companyId,
+        companyId,
         status: 'ACTIVE',
         deletedAt: null,
         // Never expose the hidden System Global Masters company or its users
         // through lead-assignment APIs.
         company: { isSystem: false },
       },
-      select: userSelect,
+      select: mappingUserSelect,
       orderBy: { fullName: 'asc' },
     });
     const options = (values: readonly string[]) =>

@@ -45,6 +45,17 @@ export const wacrmLeadPayloadSchema = z
     leadStage: z.enum(LEAD_STAGES),
     /** Owner email in the target tenant; resolved to a user id server-side. */
     assignedToEmail: z.string().trim().email().max(255),
+    /**
+     * Mapped salesperson id (CRM User Mapping): the Travel CRM user the
+     * lead is assigned to instead of the owner-email user. Optional —
+     * when omitted (or unresolvable) the owner email remains the
+     * assignee. Must be an ACTIVE, non-deleted user in the SAME
+     * company as the owner-email user, otherwise creation fails with
+     * ASSIGNED_USER_NOT_FOUND so the caller can fall back to the
+     * owner. Never a tenant override: the company still derives from
+     * the owner-email user.
+     */
+    assignedToUserId: z.string().trim().uuid().nullable().optional(),
     dateOfBirth: optionalDate,
     travelStartDate: optionalDate,
     // Month-based travel timing (Phase 2): same ranges and pair
