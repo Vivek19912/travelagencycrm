@@ -1062,7 +1062,6 @@ model Company {
   queryItineraries             QueryItinerary[]
   integrationCredentials       IntegrationCredential[]
   wacrmLeadLinks               WacrmLeadLink[]
-  wacrmManagementCredentials   WacrmManagementCredential[]
   quotationCounters            QuotationCounter[]
   quotationTemplates           QuotationTemplate[]
   quotationTemplateItineraries QuotationTemplateItineraryDay[]
@@ -5367,38 +5366,6 @@ model WacrmLeadLink {
   @@unique([companyId, wacrmAccountId, flowRunId])
   @@index([companyId, status])
   @@map("wacrm_lead_links")
-}
-
-/// WhatsApp Max API key for CRM User Mapping management, stored per
-/// company. An administrator pastes the key once (minted in WhatsApp
-/// Max → Settings → API keys with the `crm-mappings:manage` scope);
-/// only the AES-256-GCM envelope persists (see DATA_ENCRYPTION_KEY),
-/// mirroring the SMTP/bank-account pattern — the plaintext is never
-/// stored and never returned by any endpoint. One row per company:
-/// the key inherently belongs to exactly one WhatsApp Max workspace,
-/// which is what keeps tenants isolated without trusting any
-/// browser-supplied account identifier.
-model WacrmManagementCredential {
-  id        String @id @default(uuid()) @db.Uuid
-  companyId String @db.Uuid
-
-  /// AES-256-GCM envelope of the `wacrm_live_…` key.
-  secretEncrypted String @db.Text
-  keyVersion      String @db.VarChar(30)
-
-  /// Non-secret display prefix (e.g. `wacrm_live_ab12…`), shown in
-  /// settings so admins can tell keys apart.
-  keyPrefix String @db.VarChar(32)
-
-  createdById String? @db.Uuid
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
-
-  @@unique([companyId])
-  @@map("wacrm_management_credentials")
 }
 
 /// Lifecycle of a standalone Hotel Voucher (independent of Booking).

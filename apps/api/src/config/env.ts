@@ -62,18 +62,6 @@ const envSchema = z.object({
   // Invalid entries are ignored at parse time rather than failing boot.
   PLATFORM_ALIAS_HOSTS: z.string().default(''),
 
-  /**
-   * Base URL of the linked WhatsApp Max deployment, used ONLY
-   * server-side by the CRM User Mapping proxy (Settings →
-   * Integrations). The browser never sees it or the stored API key.
-   * Empty (the default) means the proxy is not configured — the
-   * mapping UI reports it instead of failing obscurely.
-   */
-  WACRM_BASE_URL: z.preprocess(
-    (value) => (value === '' ? undefined : value),
-    z.string().url().optional(),
-  ),
-
   DATABASE_URL: z
     .string()
     .min(1, 'DATABASE_URL is required')

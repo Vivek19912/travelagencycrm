@@ -1,13 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Eye, EyeOff, X } from 'lucide-react';
-import { PERMISSIONS, SETTINGS_CURRENCIES, SETTINGS_TIMEZONES } from '@interscale/shared';
+import { SETTINGS_CURRENCIES, SETTINGS_TIMEZONES } from '@interscale/shared';
 import { ApiError } from '@/api/client';
 import { Button } from '@/components/ui/Button';
 import { formatDateTime12Hour } from '@/utils/dateTime';
 import { useAuth } from '@/features/auth/AuthProvider';
 import { SearchUsagePage } from '@/pages/administration/SearchUsagePage';
 import { EmailConfigurationForm } from './EmailConfigurationForm';
-import { CrmUserMappingTab } from './CrmUserMappingTab';
 import {
   useAddSearchApiKey,
   useRemoveSearchApiKey,
@@ -60,7 +59,6 @@ const TABS = [
   ['live-search', 'Live Search'],
   ['api-usage', 'API Usage'],
   ['email', 'Email'],
-  ['integrations', 'Integrations'],
 ] as const;
 type TabKey = (typeof TABS)[number][0];
 
@@ -1154,9 +1152,8 @@ function LiveSearchKeyTab() {
 
 export function SettingsPage() {
   const settings = useSettings();
-  const { isOwner, hasPermission } = useAuth();
+  const { isOwner } = useAuth();
   const [tab, setTab] = useState<TabKey>('profile');
-  const canManageIntegrations = hasPermission(PERMISSIONS.SETTINGS_UPDATE);
 
   if (settings.isLoading) return <div className="h-96 animate-pulse rounded-xl bg-card" />;
   if (settings.isError || !settings.data)
@@ -1178,10 +1175,7 @@ export function SettingsPage() {
         className="flex gap-1 overflow-x-auto rounded-xl border bg-card p-1"
         aria-label="Settings sections"
       >
-        {TABS.filter(
-          ([key]) =>
-            (key !== 'api-usage' || isOwner) && (key !== 'integrations' || canManageIntegrations),
-        ).map(([key, label]) => (
+        {TABS.filter(([key]) => key !== 'api-usage' || isOwner).map(([key, label]) => (
           <button
             key={key}
             className={`whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium ${
@@ -1209,7 +1203,6 @@ export function SettingsPage() {
       {tab === 'live-search' && <LiveSearchKeyTab />}
       {tab === 'api-usage' && isOwner && <SearchUsagePage />}
       {tab === 'email' && <EmailConfigurationForm />}
-      {tab === 'integrations' && canManageIntegrations && <CrmUserMappingTab />}
     </div>
   );
 }
