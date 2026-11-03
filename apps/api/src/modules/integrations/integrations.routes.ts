@@ -1,5 +1,13 @@
 import { Router } from 'express';
-import { PERMISSIONS, wacrmCredentialMintSchema, wacrmLeadPayloadSchema } from '@interscale/shared';
+import {
+  PERMISSIONS,
+  crmMappingCreateSchema,
+  crmMappingIdParamsSchema,
+  crmMappingUpdateSchema,
+  wacrmApiKeySchema,
+  wacrmCredentialMintSchema,
+  wacrmLeadPayloadSchema,
+} from '@interscale/shared';
 import { z } from 'zod';
 import { requireAuth, requireVerifiedEmail } from '../../middleware/authenticate.js';
 import { authenticateIntegration } from '../../middleware/wacrm-auth.middleware.js';
@@ -7,6 +15,7 @@ import { requirePermission } from '../../middleware/require-permission.js';
 import { validateRequest } from '../../middleware/validate-request.js';
 import { asyncHandler } from '../../utils/async-handler.js';
 import { integrationsController } from './wacrm.controller.js';
+import { crmMappingsController } from './crm-mappings.controller.js';
 
 const router = Router();
 const credentialId = z.object({ id: z.string().uuid() });
@@ -63,6 +72,65 @@ router.get(
   requirePermission(PERMISSIONS.QUERIES_VIEW),
   validateRequest({ params: z.object({ id: z.string().uuid() }) }),
   asyncHandler(integrationsController.wacrmLeadExists),
+);
+
+// --- CRM User Mapping management (interactive admin sessions).
+// The mappings live in WhatsApp Max; these session-gated endpoints
+// proxy to its versioned machine API using the per-company API key
+// stored encrypted server-side (never in the browser, never in
+// logs). Only settings managers may manage them.
+router.get(
+  '/crm-user-mappings/credential',
+  requireAuth,
+  requireVerifiedEmail,
+  requirePermission(PERMISSIONS.SETTINGS_UPDATE),
+  asyncHandler(crmMappingsController.credentialStatus),
+);
+router.put(
+  '/crm-user-mappings/credential',
+  requireAuth,
+  requireVerifiedEmail,
+  requirePermission(PERMISSIONS.SETTINGS_UPDATE),
+  validateRequest({ body: z.object({ secret: wacrmApiKeySchema }) }),
+  asyncHandler(crmMappingsController.saveCredential),
+);
+router.delete(
+  '/crm-user-mappings/credential',
+  requireAuth,
+  requireVerifiedEmail,
+  requirePermission(PERMISSIONS.SETTINGS_UPDATE),
+  asyncHandler(crmMappingsController.deleteCredential),
+);
+router.get(
+  '/crm-user-mappings',
+  requireAuth,
+  requireVerifiedEmail,
+  requirePermission(PERMISSIONS.SETTINGS_UPDATE),
+  asyncHandler(crmMappingsController.list),
+);
+router.post(
+  '/crm-user-mappings',
+  requireAuth,
+  requireVerifiedEmail,
+  requirePermission(PERMISSIONS.SETTINGS_UPDATE),
+  validateRequest({ body: crmMappingCreateSchema }),
+  asyncHandler(crmMappingsController.create),
+);
+router.patch(
+  '/crm-user-mappings/:id',
+  requireAuth,
+  requireVerifiedEmail,
+  requirePermission(PERMISSIONS.SETTINGS_UPDATE),
+  validateRequest({ params: crmMappingIdParamsSchema, body: crmMappingUpdateSchema }),
+  asyncHandler(crmMappingsController.update),
+);
+router.delete(
+  '/crm-user-mappings/:id',
+  requireAuth,
+  requireVerifiedEmail,
+  requirePermission(PERMISSIONS.SETTINGS_UPDATE),
+  validateRequest({ params: crmMappingIdParamsSchema }),
+  asyncHandler(crmMappingsController.remove),
 );
 
 export { router as integrationsRoutes };
