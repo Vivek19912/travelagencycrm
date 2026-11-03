@@ -364,6 +364,21 @@ describe('Phase 6 travel lead management', () => {
     expect(response.status).toBe(400);
     expect(response.body.error.message).toContain('Stage cannot move from NEW_LEAD');
   });
+  it('moves through NOT_CONNECTED and back into the funnel', async () => {
+    const client = await owner('owner@alpha.test', 'Alpha');
+    const id = (await client.post('/api/queries', payload())).body.data.id;
+    // NEW_LEAD → NOT_CONNECTED → QUALIFIED is an allowed path.
+    expect((await client.patch(`/api/queries/${id}/stage`, { stage: 'NOT_CONNECTED' })).status).toBe(200);
+    expect((await client.patch(`/api/queries/${id}/stage`, { stage: 'QUALIFIED' })).status).toBe(200);
+    expect((await db.query.findUniqueOrThrow({ where: { id } })).leadStage).toBe('QUALIFIED');
+    // NOT_CONNECTED → QUOTATION_SENT skips the funnel and stays rejected.
+    const back = await client.post('/api/queries', payload());
+    const backId = back.body.data.id as string;
+    expect((await client.patch(`/api/queries/${backId}/stage`, { stage: 'NOT_CONNECTED' })).status).toBe(200);
+    const bad = await client.patch(`/api/queries/${backId}/stage`, { stage: 'QUOTATION_SENT' });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error.message).toContain('Stage cannot move from NOT_CONNECTED');
+  });
   it('still denies a stage update for a user without stage-update permission', async () => {
     const client = await owner('owner@booking.test', 'Booking Confirmed Travel');
     const id = (await client.post('/api/queries', payload())).body.data.id;

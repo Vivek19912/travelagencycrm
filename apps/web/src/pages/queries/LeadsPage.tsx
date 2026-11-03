@@ -645,7 +645,7 @@ function leadChipVariant(value: string): string {
   if (value === 'BOOKING_CONFIRMED') return 'leads-chip--confirmed';
   if (value === 'LOST') return 'leads-chip--lost';
   if (value === 'CANCELLED' || value === 'INVALID') return 'leads-chip--muted';
-  if (value === 'ON_HOLD') return 'leads-chip--hold';
+  if (value === 'ON_HOLD' || value === 'NOT_CONNECTED') return 'leads-chip--hold';
   return 'leads-chip--neutral';
 }
 

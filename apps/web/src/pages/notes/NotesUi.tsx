@@ -20,6 +20,7 @@ const stageColors: Record<string, string> = {
   CANCELLED: 'bg-slate-100 text-slate-600',
   INVALID: 'bg-slate-100 text-slate-600',
   ON_HOLD: 'bg-yellow-100 text-yellow-700',
+  NOT_CONNECTED: 'bg-slate-200 text-slate-700',
 };
 
 export function StagePill({ stage }: { stage: string | null }) {

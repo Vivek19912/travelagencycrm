@@ -100,6 +100,7 @@ enum LeadStage {
   CANCELLED
   INVALID
   ON_HOLD
+  NOT_CONNECTED
 }
 
 enum QueryPriority {

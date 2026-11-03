@@ -2283,6 +2283,41 @@ describe('Phase 6 inline Type/Stage editing on the Leads List', () => {
     expect(calls[0]!.body).toEqual({ stage: 'CONTACTED' });
   });
 
+  it('offers Not Connected in the inline stage editor and saves its stored value', async () => {
+    const richLookups = {
+      ...lookups,
+      leadStages: [
+        { value: 'NEW_LEAD', label: 'New Lead' },
+        { value: 'NOT_CONNECTED', label: 'Not Connected' },
+      ],
+    };
+    const calls: Array<{ url: string; body: unknown }> = [];
+    const mock = vi.fn(async (input: RequestInfo | URL, options?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/analytics')) return response(analytics);
+      if (url.includes('/lookups')) return response(richLookups);
+      if (options?.method === 'PATCH') {
+        calls.push({ url, body: JSON.parse(String(options.body)) });
+        return response({ ...lead, leadStage: 'NOT_CONNECTED' });
+      }
+      return response({
+        data: [{ ...lead, leadStage: 'NEW_LEAD' }],
+        pagination: { page: 1, pageSize: 20, total: 1, totalPages: 1 },
+      });
+    });
+    vi.stubGlobal('fetch', mock);
+    renderWithProviders(<LeadsPage />);
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Change lead stage from New Lead' }),
+    );
+    const listbox = screen.getByRole('listbox', { name: 'Change lead stage' });
+    expect(within(listbox).getByRole('option', { name: 'Not Connected' })).toBeInTheDocument();
+    pickOption('Change lead stage', 'Not Connected');
+    await waitFor(() => expect(calls.length).toBe(1));
+    expect(calls[0]!.url).toContain(`/queries/${lead.id}/stage`);
+    expect(calls[0]!.body).toEqual({ stage: 'NOT_CONNECTED' });
+  });
+
   it('only one dropdown stays open after opening a second badge', async () => {
     patchStub([lead]);
     renderWithProviders(<LeadsPage />);

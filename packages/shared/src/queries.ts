@@ -30,6 +30,7 @@ export const LEAD_STAGES = [
   'CANCELLED',
   'INVALID',
   'ON_HOLD',
+  'NOT_CONNECTED',
 ] as const;
 export const QUERY_PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'URGENT'] as const;
 /** Allowed date fields for the Leads list date-range filter. */

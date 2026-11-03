@@ -752,6 +752,7 @@ describe('WACRM lead creation: departure, travelers, and enum coverage', () => {
       'CANCELLED',
       'INVALID',
       'ON_HOLD',
+      'NOT_CONNECTED',
     ] as const;
     let n = 70;
     for (const leadStage of stages) {
