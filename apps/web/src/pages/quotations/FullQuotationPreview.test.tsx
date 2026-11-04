@@ -883,6 +883,46 @@ describe('Live preview in the builder', () => {
     expect(within(body).getByRole('link', { name: /Contact Now/ })).toBeInTheDocument();
   });
 
+  it('renders the singular Child With/Without Bed labels in the live preview and updates them without saving', async () => {
+    const fetchMock = builderFetch({
+      ...detail({
+        perAdultPrice: '10000',
+        perChildWithBedPrice: '2000',
+        perChildWithoutBedPrice: '1000',
+        perInfantPrice: '7000',
+      }),
+      adults: 2,
+      childrenWithBed: 1,
+      childrenWithoutBed: 1,
+      infants: 1,
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderBuilder();
+    await screen.findByRole('heading', { name: 'Quotation builder' });
+    // preview open by default (no click needed)
+    const doc = await pinnedReady();
+    const body = doc.body as HTMLElement;
+    // The pinned Live Weblink Preview uses the shared traveler breakdown
+    // labels — singular Child With/Without Bed, never the old plural forms.
+    expect(within(body).getByText('Child With Bed (CWB)')).toBeInTheDocument();
+    expect(within(body).getByText('Child Without Bed (CWOB)')).toBeInTheDocument();
+    expect(within(body).queryByText('Children with bed (CWB)')).not.toBeInTheDocument();
+    expect(within(body).queryByText('Children without bed (CWOB)')).not.toBeInTheDocument();
+    // Adults and Infants labels are unchanged.
+    expect(within(body).getByText('Adults')).toBeInTheDocument();
+    expect(within(body).getByText('Infants')).toBeInTheDocument();
+
+    // Editing a per-person rate updates the preview immediately, with no save.
+    await userEvent.click(await screen.findByRole('button', { name: 'Pricing' }));
+    const cwbPrice = screen.getByLabelText('Per CWB Price') as HTMLInputElement;
+    await userEvent.clear(cwbPrice);
+    await userEvent.type(cwbPrice, '3000');
+    expect(await within(body).findByText('1 × ₹3,000')).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(([, options]) => options?.method === 'PATCH'),
+    ).toBe(false);
+  });
+
   it('reflects edited journey routes in the phone immediately without saving', async () => {
     const fetchMock = builderFetch(detail());
     vi.stubGlobal('fetch', fetchMock);
