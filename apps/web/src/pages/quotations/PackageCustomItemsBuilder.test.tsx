@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Route, Routes } from 'react-router-dom';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProviders } from '@/test/utils';
 import { QuotationBuilderPage } from './QuotationBuilderPage';
@@ -301,6 +301,122 @@ describe('By Traveler — Additional Price Items', () => {
 
     expect(await screen.findByText('Extra Charges')).toBeInTheDocument();
     expect(screen.queryByText('Additional Price Items')).not.toBeInTheDocument();
+  });
+
+  it('offers exactly the Flight Charges and Visa Charges suggestions on focus', async () => {
+    vi.stubGlobal('fetch', masterFetch(quotationDetail('PER_PERSON')));
+    renderBuilder();
+    await screen.findByRole('heading', { name: 'Quotation builder' });
+    await openPricingTab();
+
+    await userEvent.click(addItem());
+    // Focusing the empty Label input shows exactly the two suggestions.
+    await userEvent.click(labelInput(1));
+    const listbox = screen.getByRole('listbox', { name: 'Suggested labels' });
+    const options = within(listbox).getAllByRole('option');
+    expect(options.map((option) => option.textContent)).toEqual([
+      'Flight Charges',
+      'Visa Charges',
+    ]);
+  });
+
+  it('fills the label when Flight Charges is selected without touching the amount', async () => {
+    vi.stubGlobal('fetch', masterFetch(quotationDetail('PER_PERSON')));
+    renderBuilder();
+    await screen.findByRole('heading', { name: 'Quotation builder' });
+    await openPricingTab();
+
+    await userEvent.click(addItem());
+    await userEvent.click(labelInput(1));
+    const listbox = screen.getByRole('listbox', { name: 'Suggested labels' });
+    await userEvent.click(within(listbox).getByRole('option', { name: 'Flight Charges' }));
+
+    expect(labelInput(1)).toHaveValue('Flight Charges');
+    // Selecting a label never populates the amount; the total is unchanged.
+    expect((amountInput(1) as HTMLInputElement).value).toBe('');
+    expect(totalInput().value).toContain('2,02,440');
+
+    // The amount is entered separately afterwards.
+    await userEvent.type(amountInput(1), '5000');
+    expect(totalInput().value).toContain('2,07,440');
+  });
+
+  it('filters suggestions while typing and fills the label when Visa Charges is selected', async () => {
+    vi.stubGlobal('fetch', masterFetch(quotationDetail('PER_PERSON')));
+    renderBuilder();
+    await screen.findByRole('heading', { name: 'Quotation builder' });
+    await openPricingTab();
+
+    await userEvent.click(addItem());
+    await userEvent.type(labelInput(1), 'visa');
+    const listbox = screen.getByRole('listbox', { name: 'Suggested labels' });
+    expect(within(listbox).getByRole('option', { name: 'Visa Charges' })).toBeInTheDocument();
+    expect(within(listbox).queryByRole('option', { name: 'Flight Charges' })).not.toBeInTheDocument();
+
+    await userEvent.click(within(listbox).getByRole('option', { name: 'Visa Charges' }));
+    expect(labelInput(1)).toHaveValue('Visa Charges');
+    expect((amountInput(1) as HTMLInputElement).value).toBe('');
+  });
+
+  it('keeps custom labels free-text and saves mixed suggestion + custom items', async () => {
+    const fetchMock = masterFetch(quotationDetail('PER_PERSON'));
+    vi.stubGlobal('fetch', fetchMock);
+    renderBuilder();
+    await screen.findByRole('heading', { name: 'Quotation builder' });
+    await openPricingTab();
+
+    // A completely custom label shows no suggestions and stays editable.
+    await userEvent.click(addItem());
+    await userEvent.type(labelInput(1), 'Travel Insurance');
+    expect(screen.queryByRole('listbox', { name: 'Suggested labels' })).not.toBeInTheDocument();
+    await userEvent.type(amountInput(1), '1500');
+
+    // A second item using a predefined suggestion.
+    await userEvent.click(addItem());
+    await userEvent.click(labelInput(2));
+    const suggestionBox = screen.getByRole('listbox', { name: 'Suggested labels' });
+    await userEvent.click(within(suggestionBox).getByRole('option', { name: 'Visa Charges' }));
+    await userEvent.type(amountInput(2), '3000');
+    // 2 × 101,220 + 1,500 + 3,000.
+    expect(totalInput().value).toContain('2,06,940');
+
+    await userEvent.click(screen.getAllByRole('button', { name: 'Save quotation' })[1]!);
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([, options]) => options?.method === 'PATCH')).toBe(true),
+    );
+    const patch = fetchMock.mock.calls.find(([, options]) => options?.method === 'PATCH');
+    const body = JSON.parse(String(patch![1]!.body));
+    expect(body.packageCustomItems).toEqual([
+      { id: expect.any(String), label: 'Travel Insurance', amount: 1500 },
+      { id: expect.any(String), label: 'Visa Charges', amount: 3000 },
+    ]);
+  });
+
+  it('edits an existing label via a suggestion and preserves it on save', async () => {
+    const fetchMock = masterFetch(
+      quotationDetail('PER_PERSON', [{ label: 'Old label', amount: 2000 }]),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    renderBuilder();
+    await screen.findByRole('heading', { name: 'Quotation builder' });
+    await openPricingTab();
+
+    expect(await screen.findByDisplayValue('Old label')).toBeInTheDocument();
+    await userEvent.clear(labelInput(1));
+    await userEvent.click(labelInput(1));
+    const editBox = screen.getByRole('listbox', { name: 'Suggested labels' });
+    await userEvent.click(within(editBox).getByRole('option', { name: 'Flight Charges' }));
+    expect(labelInput(1)).toHaveValue('Flight Charges');
+
+    await userEvent.click(screen.getAllByRole('button', { name: 'Save quotation' })[1]!);
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([, options]) => options?.method === 'PATCH')).toBe(true),
+    );
+    const patch = fetchMock.mock.calls.find(([, options]) => options?.method === 'PATCH');
+    const body = JSON.parse(String(patch![1]!.body));
+    expect(body.packageCustomItems).toEqual([
+      { id: expect.any(String), label: 'Flight Charges', amount: 2000 },
+    ]);
   });
 });
 

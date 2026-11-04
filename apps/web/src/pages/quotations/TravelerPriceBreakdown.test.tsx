@@ -114,8 +114,8 @@ describe('Public weblink — By Traveler package price breakdown', () => {
     ).toBeInTheDocument();
     const section = breakdownSection();
     expect(within(section).getByText('Adults')).toBeInTheDocument();
-    expect(within(section).getByText('Children with bed (CWB)')).toBeInTheDocument();
-    expect(within(section).getByText('Children without bed (CWOB)')).toBeInTheDocument();
+    expect(within(section).getByText('Child With Bed (CWB)')).toBeInTheDocument();
+    expect(within(section).getByText('Child Without Bed (CWOB)')).toBeInTheDocument();
 
     // qty × rate lines.
     expect(within(section).getByText('3 × ₹100')).toBeInTheDocument();
@@ -157,9 +157,9 @@ describe('Public weblink — By Traveler package price breakdown', () => {
     await screen.findByText('Custom Package for Aarav Mehta');
     const section = breakdownSection();
     expect(within(section).getByText('Adults')).toBeInTheDocument();
-    expect(within(section).getByText('Children with bed (CWB)')).toBeInTheDocument();
+    expect(within(section).getByText('Child With Bed (CWB)')).toBeInTheDocument();
     // No CWOB and no Infants row when their count is zero.
-    expect(within(section).queryByText('Children without bed (CWOB)')).not.toBeInTheDocument();
+    expect(within(section).queryByText('Child Without Bed (CWOB)')).not.toBeInTheDocument();
     expect(within(section).queryByText('Infants')).not.toBeInTheDocument();
     // 3×100 + 1×200 = 500.
     expect(within(section).getAllByText('₹500').length).toBeGreaterThanOrEqual(1);
@@ -289,6 +289,28 @@ describe('Public weblink — By Traveler package price breakdown', () => {
     expect(within(section).getAllByText('₹9,300').length).toBe(1);
   });
 
+  it('renders the predefined Flight Charges and Visa Charges labels in the weblink', async () => {
+    const payload = publicQuotation({
+      packageCustomItems: [
+        { label: 'Flight Charges', amount: 5000 },
+        { label: 'Visa Charges', amount: 3000 },
+      ],
+    });
+    const pricing = resolveQuotationPricing({
+      version: payload.version,
+      quotation: payload.quotation,
+    });
+    expect(pricing.customItems.subtotal).toBe(8000);
+
+    renderWeblink(payload, 'token-suggested-labels');
+    await screen.findByText('Custom Package for Aarav Mehta');
+    const section = breakdownSection();
+    expect(within(section).getByText('Flight Charges')).toBeInTheDocument();
+    expect(within(section).getByText('Visa Charges')).toBeInTheDocument();
+    expect(within(section).getByText('₹5,000')).toBeInTheDocument();
+    expect(within(section).getByText('₹3,000')).toBeInTheDocument();
+  });
+
   it('renders rows in the quotation’s saved pricingRowOrder', async () => {
     const payload = publicQuotation(
       { pricingRowOrder: ['infants', 'cwb', 'adults', 'cwob'] },
@@ -302,9 +324,9 @@ describe('Public weblink — By Traveler package price breakdown', () => {
       .map((li) => li.querySelector('p')?.textContent);
     expect(labels).toEqual([
       'Infants',
-      'Children with bed (CWB)',
+      'Child With Bed (CWB)',
       'Adults',
-      'Children without bed (CWOB)',
+      'Child Without Bed (CWOB)',
     ]);
   });
 

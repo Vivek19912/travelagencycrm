@@ -18867,8 +18867,11 @@ describe('Summary & Pricing — package pricing, tax note and secure booking', (
     expect(screen.queryByText('Pricing Validation')).not.toBeInTheDocument();
     expect(screen.queryByText(/Traveler pricing is incomplete/i)).not.toBeInTheDocument();
 
-    // The surrounding pricing UI is unchanged.
-    expect(screen.getByText('Initial Payment Details')).toBeInTheDocument();
+    // The surrounding pricing UI is unchanged, except the Initial Payment
+    // Details card which is intentionally hidden from the builder UI.
+    expect(screen.queryByText('Initial Payment Details')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Initial amount for booking')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Payment link')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Discount amount')).toBeInTheDocument();
     expect(screen.getByLabelText('Tax rate percent')).toBeInTheDocument();
   });
@@ -19043,19 +19046,23 @@ describe('Summary & Pricing — package pricing, tax note and secure booking', (
     expect(screen.queryByText(/Service Sections Pricing/)).not.toBeInTheDocument();
   });
 
-  it('keeps the saved tax note on "no change" and saves the initial amount and link', async () => {
+  it('keeps the saved tax note and preserves hidden initial payment values on save', async () => {
+    // Initial Payment Details inputs are hidden from the builder UI, but
+    // their saved values must survive a save untouched.
     const fetchMock = masterFetch(
       pricingBase({
         taxNote: 'Inclusive of GST and TCS',
-        initialPaymentAmount: '0',
-        paymentLink: null,
+        initialPaymentAmount: '2000',
+        paymentLink: 'https://pay.example.com/abc',
       }),
     );
     vi.stubGlobal('fetch', fetchMock);
     renderBuilderPage();
     await openTab('Pricing');
-    await userEvent.type(screen.getByLabelText('Initial amount for booking'), '2000');
-    await userEvent.type(screen.getByLabelText('Payment link'), 'https://pay.example.com/abc');
+    // Hidden from the visible builder UI.
+    expect(screen.queryByText('Initial Payment Details')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Initial amount for booking')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Payment link')).not.toBeInTheDocument();
     await userEvent.click(screen.getAllByRole('button', { name: 'Save quotation' })[1]!);
     await waitFor(() => {
       const patch = fetchMock.mock.calls.find(([, options]) => options?.method === 'PATCH');
@@ -19081,15 +19088,14 @@ describe('Summary & Pricing — package pricing, tax note and secure booking', (
     });
   });
 
-  it('rejects an invalid payment link and blocks the save', async () => {
+  it('offers no payment link input in the builder UI (initial payment hidden)', async () => {
     const fetchMock = masterFetch(pricingBase());
     vi.stubGlobal('fetch', fetchMock);
     renderBuilderPage();
     await openTab('Pricing');
-    await userEvent.type(screen.getByLabelText('Payment link'), 'not-a-url');
-    await userEvent.click(screen.getAllByRole('button', { name: 'Save quotation' })[1]!);
-    expect((await screen.findAllByText(/valid URL starting with/i)).length).toBeGreaterThan(0);
-    expect(fetchMock.mock.calls.some(([, options]) => options?.method === 'PATCH')).toBe(false);
+    expect(screen.queryByText('Initial Payment Details')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Payment link')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Initial amount for booking')).not.toBeInTheDocument();
   });
 
   it('shows a single section-wise total and no separate add-on bar in the summary card', async () => {
@@ -19201,9 +19207,9 @@ describe('Summary & Pricing — package pricing, tax note and secure booking', (
     const breakdown = screen.getByTestId('traveler-price-breakdown');
     expect(within(breakdown).getByText('Adults')).toBeInTheDocument();
     expect(within(breakdown).getByText('2 × ₹10,000')).toBeInTheDocument();
-    expect(within(breakdown).getByText('Children with bed (CWB)')).toBeInTheDocument();
+    expect(within(breakdown).getByText('Child With Bed (CWB)')).toBeInTheDocument();
     expect(within(breakdown).getByText('1 × ₹2,000')).toBeInTheDocument();
-    expect(within(breakdown).getByText('Children without bed (CWOB)')).toBeInTheDocument();
+    expect(within(breakdown).getByText('Child Without Bed (CWOB)')).toBeInTheDocument();
     expect(within(breakdown).getByText('1 × ₹1,000')).toBeInTheDocument();
     expect(within(breakdown).getByText('Infants')).toBeInTheDocument();
     expect(within(breakdown).getByText('1 × ₹7,000')).toBeInTheDocument();
@@ -19225,8 +19231,8 @@ describe('Summary & Pricing — package pricing, tax note and secure booking', (
     expect(within(breakdown).getByText('1 × ₹10,000')).toBeInTheDocument();
     expect(within(breakdown).getByText('Infants')).toBeInTheDocument();
     expect(within(breakdown).getByText('1 × ₹7,000')).toBeInTheDocument();
-    expect(within(breakdown).queryByText('Children with bed (CWB)')).not.toBeInTheDocument();
-    expect(within(breakdown).queryByText('Children without bed (CWOB)')).not.toBeInTheDocument();
+    expect(within(breakdown).queryByText('Child With Bed (CWB)')).not.toBeInTheDocument();
+    expect(within(breakdown).queryByText('Child Without Bed (CWOB)')).not.toBeInTheDocument();
   });
 
   it('hides the tax note and never shows the control values publicly', async () => {

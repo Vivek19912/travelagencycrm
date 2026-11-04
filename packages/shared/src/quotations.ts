@@ -2453,6 +2453,20 @@ export interface TravelerPriceRow {
 export const TRAVELER_PRICING_ROW_IDS = ['adults', 'cwb', 'cwob', 'infants'] as const;
 
 /**
+ * Customer-friendly display labels for the shared traveler pricing rows
+ * (`TravelerPriceRow.label` is 'Adults' | 'CWB' | 'CWOB' | 'Infants').
+ * Single source of truth for every Price Breakdown renderer (public weblink,
+ * Weblink PDF via the shared weblink view, builder live preview) so the
+ * wording can never drift between surfaces.
+ */
+export const TRAVELER_BREAKDOWN_LABELS: Record<string, string> = {
+  Adults: 'Adults',
+  CWB: 'Child With Bed (CWB)',
+  CWOB: 'Child Without Bed (CWOB)',
+  Infants: 'Infants',
+};
+
+/**
  * Order Price Breakdown rows by a saved `pricingRowOrder`. Rows whose id is not
  * listed keep their relative order and are placed after the listed ones. Pure
  * and stable, so it is safe to call from both the builder and the renderer.

@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useFieldArray, useForm, useWatch, type FieldPath, type UseFormReturn } from 'react-hook-form';
@@ -254,6 +254,126 @@ const SHOW_VISA_QUOTATION_TAB = false;
 // Set this back to true to restore the tab and panel; all backend/schema/data
 // paths are untouched and existing quotations keep their saved values.
 const SHOW_DESTINATION_EXPERT_TAB = false;
+
+/**
+ * Predefined Label suggestions for Additional Price Items (By Traveler
+ * pricing). Exactly these two — free-text labels remain fully supported and
+ * selecting a suggestion only fills the label, never the amount.
+ */
+export const ADDITIONAL_PRICE_ITEM_LABEL_SUGGESTIONS = ['Flight Charges', 'Visa Charges'] as const;
+
+/**
+ * Free-text Label input with a searchable suggestion dropdown. The
+ * suggestions appear on focus/click, filter as the user types, and populate
+ * only the label on selection. Typing any custom label (or ignoring the
+ * list) works exactly like the previous plain input.
+ */
+function AdditionalPriceLabelInput({
+  value,
+  onChange,
+  ariaLabel,
+  placeholder,
+  maxLength,
+  inputClassName,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  ariaLabel: string;
+  placeholder?: string;
+  maxLength?: number;
+  inputClassName?: string;
+}) {
+  const listId = useId();
+  const [open, setOpen] = useState(false);
+  const [highlight, setHighlight] = useState(-1);
+  const query = (value ?? '').trim().toLowerCase();
+  const matches = ADDITIONAL_PRICE_ITEM_LABEL_SUGGESTIONS.filter((suggestion) =>
+    query.length === 0 ? true : suggestion.toLowerCase().includes(query),
+  );
+  const visible = open && matches.length > 0;
+  const pick = (suggestion: string) => {
+    onChange(suggestion);
+    setOpen(false);
+    setHighlight(-1);
+  };
+  return (
+    <div
+      className="relative mt-1"
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setOpen(false);
+          setHighlight(-1);
+        }
+      }}
+    >
+      <input
+        type="text"
+        role="combobox"
+        aria-label={ariaLabel}
+        aria-expanded={visible}
+        aria-controls={listId}
+        aria-autocomplete="list"
+        aria-activedescendant={highlight >= 0 ? `${listId}-${highlight}` : undefined}
+        maxLength={maxLength}
+        placeholder={placeholder}
+        autoComplete="off"
+        value={value}
+        onChange={(event) => {
+          onChange(event.target.value);
+          setOpen(true);
+          setHighlight(-1);
+        }}
+        onFocus={() => {
+          setOpen(true);
+          setHighlight(-1);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowDown' && matches.length > 0) {
+            event.preventDefault();
+            setOpen(true);
+            setHighlight((prev) => (prev + 1) % matches.length);
+          } else if (event.key === 'ArrowUp' && matches.length > 0) {
+            event.preventDefault();
+            setOpen(true);
+            setHighlight((prev) => (prev <= 0 ? matches.length - 1 : prev - 1));
+          } else if (event.key === 'Enter' && open && highlight >= 0 && highlight < matches.length) {
+            event.preventDefault();
+            pick(matches[highlight] as string);
+          } else if (event.key === 'Escape') {
+            setOpen(false);
+            setHighlight(-1);
+          }
+        }}
+        className={inputClassName}
+      />
+      {visible && (
+        <ul
+          id={listId}
+          role="listbox"
+          aria-label="Suggested labels"
+          className="absolute z-20 mt-1 max-h-44 w-full overflow-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+        >
+          {matches.map((suggestion, suggestionIndex) => (
+            <li
+              key={suggestion}
+              id={`${listId}-${suggestionIndex}`}
+              role="option"
+              aria-selected={suggestionIndex === highlight}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => pick(suggestion)}
+              onMouseEnter={() => setHighlight(suggestionIndex)}
+              className={`cursor-pointer px-3 py-2 text-sm font-normal ${
+                suggestionIndex === highlight ? 'bg-brand-50 text-brand-800' : 'text-slate-700'
+              }`}
+            >
+              {suggestion}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 /** "Xh Ym" flight duration from date+time strings, or '' if incomputable/negative. */
 export const computeDuration = (
@@ -8722,14 +8842,13 @@ export function QuotationBuilderPage() {
                         >
                           <label className="min-w-[200px] flex-1 text-sm font-semibold text-slate-800">
                             Label
-                            <input
-                              type="text"
-                              aria-label={`Additional item ${index + 1} label`}
-                              maxLength={100}
-                              placeholder="e.g. Flight tickets"
+                            <AdditionalPriceLabelInput
                               value={item.label ?? ''}
-                              onChange={(event) => updateItem(index, { label: event.target.value })}
-                              className={`${field} mt-1`}
+                              onChange={(label) => updateItem(index, { label })}
+                              ariaLabel={`Additional item ${index + 1} label`}
+                              placeholder="e.g. Flight tickets"
+                              maxLength={100}
+                              inputClassName={field}
                             />
                           </label>
                           <label className="text-sm font-semibold text-slate-800">
@@ -9142,44 +9261,12 @@ export function QuotationBuilderPage() {
               </div>
             </section>
 
-            <section className="rounded-xl border p-5">
-              <h3 className="text-lg font-semibold text-slate-800">Initial Payment Details</h3>
-              <div className="mt-3 grid gap-4 md:grid-cols-2">
-                <label className="text-sm font-semibold text-slate-800">
-                  Initial Amount for Booking
-                  <div className="mt-1 flex items-stretch overflow-hidden rounded-lg border border-slate-300 focus-within:border-brand-500">
-                    <span className="flex items-center bg-slate-100 px-2 text-slate-500">
-                      {currency}
-                    </span>
-                    <input
-                      type="number"
-                      step="0.01"
-                      aria-label="Initial amount for booking"
-                      placeholder="Amount required to confirm booking"
-                      {...form.register('initialPaymentAmount', MONEY_FIELD)}
-                      className="min-w-0 flex-1 bg-card px-3 py-2 text-sm outline-none"
-                    />
-                  </div>
-                </label>
-                <label className="text-sm font-semibold text-slate-800">
-                  Payment Link
-                  <input
-                    aria-label="Payment link"
-                    placeholder="https://example.com/pay"
-                    {...form.register('paymentLink', {
-                      setValueAs: (value: unknown) =>
-                        typeof value === 'string' ? value.trim() || null : (value ?? null),
-                    })}
-                    className={`${field} mt-1`}
-                  />
-                  {form.formState.errors.paymentLink && (
-                    <span className="mt-1 block text-xs font-normal text-red-600">
-                      {form.formState.errors.paymentLink.message as string}
-                    </span>
-                  )}
-                </label>
-              </div>
-            </section>
+            {/* Initial Payment Details intentionally hidden from the Quotation
+                Builder Pricing UI (UI-only change). The
+                `initialPaymentAmount` / `paymentLink` form values are still
+                loaded via form.reset and persisted via submit (`...value`),
+                so existing quotations remain readable and their saved values
+                are preserved on save. */}
           </div>
         )}
 

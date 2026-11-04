@@ -47,6 +47,7 @@ import {
   resolveWeblinkSectionOrder,
   normalizeFaqs,
   getFlightPerTravelerBreakdown,
+  TRAVELER_BREAKDOWN_LABELS as SHARED_TRAVELER_BREAKDOWN_LABELS,
   WEBLINK_PROFILE_FIELD_IDS,
   WEBLINK_PROFILE_FIELD_LABELS,
   WEBLINK_PROFILE_PREPARED_BY_LABEL,
@@ -2031,15 +2032,12 @@ export function PublicQuotationPage() {
 }
 
 /**
- * Customer-friendly labels for the shared traveler pricing rows
- * (`TravelerPriceRow.label` is 'Adults' | 'CWB' | 'CWOB' | 'Infants').
+ * Customer-friendly labels for the shared traveler pricing rows — imported
+ * from the shared pricing module so the weblink, Weblink PDF and builder
+ * live preview can never drift apart. (`TravelerPriceRow.label` is
+ * 'Adults' | 'CWB' | 'CWOB' | 'Infants').
  */
-const TRAVELER_BREAKDOWN_LABELS: Record<string, string> = {
-  Adults: 'Adults',
-  CWB: 'Children with bed (CWB)',
-  CWOB: 'Children without bed (CWOB)',
-  Infants: 'Infants',
-};
+const TRAVELER_BREAKDOWN_LABELS = SHARED_TRAVELER_BREAKDOWN_LABELS;
 
 /**
  * Transparent "explain the total" breakdown shown ONLY for By Traveler
