@@ -460,7 +460,7 @@ describe('Pinned preview tab navigation', () => {
 
   it.each([
     ['Hotel', 'hotels'],
-    ['FAQs', 'faqs'],
+    ['Flight', 'flights'],
     ['Pricing', 'pricing'],
   ])('opens from %s at its %s anchor', async (tab, section) => {
     vi.stubGlobal('fetch', builderFetch(detail()));
@@ -484,12 +484,12 @@ describe('Pinned preview tab navigation', () => {
     const { readSaved, anchor } = observeScroller(doc, 500, 100);
     // Install the anchor geometry before switching tabs: the navigation
     // effect reads it synchronously on the tab change.
-    expect(anchor('faqs')).not.toBeNull();
+    expect(anchor('pricing')).not.toBeNull();
     const iframe = screen.getByTestId('pinned-preview-frame');
-    // Switch to FAQs: the phone navigates to the faqs anchor. The scroller is
+    // Switch to Pricing: the phone navigates to the pricing anchor. The scroller is
     // the frame document's scrolling root, whose viewport position already
     // accounts for scrolling: 0 (current) + 500 (anchor) - 16.
-    await userEvent.click(await screen.findByRole('button', { name: 'FAQs' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Pricing' }));
     await vi.waitFor(() => expect(readSaved()).toBe(484));
     // The desktop page never scrolled and the iframe was never recreated.
     expect(window.scrollY).toBe(0);
@@ -506,9 +506,9 @@ describe('Pinned preview tab navigation', () => {
     expect(screen.getByTestId('live-preview-panel')).toBeInTheDocument();
     const doc = await pinnedReady();
     const { readSaved, anchor } = observeScroller(doc, 500, 100);
-    expect(anchor('faqs')).not.toBeNull();
+    expect(anchor('pricing')).not.toBeNull();
     // Switch to a mapped tab first so a scroll happens.
-    await userEvent.click(await screen.findByRole('button', { name: 'FAQs' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Pricing' }));
     await vi.waitFor(() => expect(readSaved()).toBe(484));
     // Switch to Settings (no public section): no jump, position preserved.
     await userEvent.click(await screen.findByRole('button', { name: 'Settings' }));
@@ -572,11 +572,122 @@ describe('Pinned preview tab navigation', () => {
     // Closing and reopening from another tab targets that tab's section.
     await userEvent.click(screen.getByRole('button', { name: 'Close live preview' }));
     expect(screen.queryByTestId('live-preview-panel')).not.toBeInTheDocument();
-    await userEvent.click(await screen.findByRole('button', { name: 'FAQs' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Pricing' }));
     await userEvent.click(screen.getByRole('button', { name: 'Open Live Preview' }));
     expect(screen.getByTestId('live-preview-panel')).toBeInTheDocument();
     const reopened = await pinnedReady();
-    expect(reopened.querySelector('[data-preview-section="faqs"]')).not.toBeNull();
+    expect(reopened.querySelector('[data-preview-section="pricing"]')).not.toBeNull();
+  });
+});
+
+describe('Preview exclusion fallback navigation', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+    vi.stubGlobal('scrollTo', vi.fn());
+    auth.permissions = new Set(['quotations.view', 'quotations.update', 'quotations.view_costing']);
+  });
+
+  /**
+   * Same observable-scroller harness as tab navigation: record scrollTop
+   * writes and report a simulated anchor position.
+   */
+  const observeScroller = (doc: Document, anchorTop: number, scrollerTop: number) => {
+    const scroller = frameScroller(doc) as HTMLElement;
+    let saved = 0;
+    Object.defineProperty(scroller, 'scrollTop', {
+      get: () => saved,
+      set: (value: number) => {
+        saved = value;
+      },
+      configurable: true,
+    });
+    scroller.getBoundingClientRect = () =>
+      ({ top: scrollerTop, left: 0, bottom: scrollerTop, right: 0, width: 0, height: 0, x: 0, y: 0 }) as DOMRect;
+    const readSaved = () => saved;
+    const anchor = (section: string) => {
+      const node = doc.querySelector<HTMLElement>(`[data-preview-section="${section}"]`);
+      if (node) {
+        node.getBoundingClientRect = () =>
+          ({ top: anchorTop, left: 0, bottom: anchorTop, right: 0, width: 0, height: 0, x: 0, y: 0 }) as DOMRect;
+      }
+      return node;
+    };
+    return { readSaved, anchor };
+  };
+
+  it('navigates to the next visible section when the active section is excluded', async () => {
+    vi.stubGlobal('fetch', builderFetch(detail()));
+    renderBuilder();
+    await screen.findByRole('heading', { name: 'Quotation builder' });
+    await userEvent.click(await screen.findByRole('button', { name: 'Hotel' }));
+    // preview open by default (no click needed)
+    expect(screen.getByTestId('live-preview-panel')).toBeInTheDocument();
+    const doc = await pinnedReady();
+    expect(doc.querySelector('[data-preview-section="hotels"]')).not.toBeNull();
+    const { readSaved, anchor } = observeScroller(doc, 500, 100);
+    // Flights is the next visible section after hotels in weblink order.
+    expect(anchor('flights')).not.toBeNull();
+    const iframe = screen.getByTestId('pinned-preview-frame');
+    // Exclude the Hotel section while it is the active preview target.
+    await userEvent.click(screen.getByLabelText('Include Hotel in Quotation'));
+    // The preview leaves the removed section: next visible is flights
+    // (0 current + 500 anchor - 16 offset), inside the phone frame only.
+    await vi.waitFor(() => expect(readSaved()).toBe(484));
+    expect(window.scrollY).toBe(0);
+    expect(screen.getByTestId('pinned-preview-frame')).toBe(iframe);
+    expect(doc.querySelector('[data-preview-section="hotels"]')).toBeNull();
+    expect(doc.querySelector('[data-preview-section="flights"]')).not.toBeNull();
+    // The excluded section is gone from content and navigation alike.
+    expect(
+      within(doc.body as HTMLElement).queryByRole('heading', { name: 'Your Hotels' }),
+    ).toBeNull();
+  });
+
+  it('navigates to the nearest previous section when the last visible one is excluded', async () => {
+    const quotation = detail({
+      services: [
+        {
+          id: 'svc-addon',
+          serviceType: 'OTHER_ADD_ON',
+          addOnServiceId: 'addon-assist',
+          name: 'Airport Assistance',
+          description: null,
+          dayNumber: null,
+          city: null,
+          quantity: '1',
+          unitSellingPrice: '1500',
+          totalSellingPrice: '1500',
+          sellingPrice: '1500',
+          sequence: 1,
+          images: [],
+        },
+      ],
+      inclusions: [],
+      faqs: [],
+    });
+    vi.stubGlobal('fetch', builderFetch(quotation));
+    renderBuilder();
+    await screen.findByRole('heading', { name: 'Quotation builder' });
+    await userEvent.click(await screen.findByRole('button', { name: 'Add-on Services' }));
+    // preview open by default (no click needed)
+    expect(screen.getByTestId('live-preview-panel')).toBeInTheDocument();
+    const doc = await pinnedReady();
+    // Add-ons renders last (no policies/faqs saved on this quotation).
+    expect(doc.querySelector('[data-preview-section="addons"]')).not.toBeNull();
+    expect(doc.querySelector('[data-preview-section="policies"]')).toBeNull();
+    expect(doc.querySelector('[data-preview-section="faqs"]')).toBeNull();
+    const { readSaved, anchor } = observeScroller(doc, 500, 100);
+    // Flights is the nearest previous visible section before addons.
+    expect(anchor('flights')).not.toBeNull();
+    const iframe = screen.getByTestId('pinned-preview-frame');
+    // Exclude the Add-on Services section while it is the active target.
+    await userEvent.click(screen.getByLabelText('Include Add-on Services in Quotation'));
+    // Nothing follows addons, so the preview moves back to flights.
+    await vi.waitFor(() => expect(readSaved()).toBe(484));
+    expect(window.scrollY).toBe(0);
+    expect(screen.getByTestId('pinned-preview-frame')).toBe(iframe);
+    expect(doc.querySelector('[data-preview-section="addons"]')).toBeNull();
+    expect(doc.querySelector('[data-preview-section="flights"]')).not.toBeNull();
   });
 });
 
@@ -1372,7 +1483,7 @@ describe('Persistent live weblink preview', () => {
     await screen.findByRole('heading', { name: 'Quotation builder' });
     await enablePinned();
     await pinnedReady();
-    for (const tab of ['Hotel', 'FAQs', 'Pricing', 'Flight']) {
+    for (const tab of ['Hotel', 'Pricing', 'Flight']) {
       await userEvent.click(await screen.findByRole('button', { name: tab }));
       const doc = pinnedDoc();
       expect(
@@ -2491,19 +2602,26 @@ describe('Preview item-level navigation', () => {
     expect(screen.getByTestId('pinned-preview-frame')).toBeInTheDocument();
   });
 
-  it('missing section keeps the current scroll position', async () => {
-    // No FAQs saved: the FAQs tab has no public section to show.
+  it('saved FAQs still render in the preview without a builder tab', async () => {
+    // The FAQs builder tab is hidden, but saved quotation FAQs must keep
+    // rendering on the public weblink and live preview.
+    vi.stubGlobal('fetch', builderFetch(detail()));
+    renderBuilder();
+    await screen.findByRole('heading', { name: 'Quotation builder' });
+    expect(screen.queryByRole('button', { name: 'FAQs' })).not.toBeInTheDocument();
+    const doc = await pinnedReady();
+    expect(doc.querySelector('[data-preview-section="faqs"]')).not.toBeNull();
+    expect(screen.getByTestId('pinned-preview-frame')).toBeInTheDocument();
+  });
+
+  it('hidden FAQs tab falls back without a blank panel', async () => {
+    // No FAQs saved: the preview simply has no faqs section to show.
     vi.stubGlobal('fetch', builderFetch(detail({ faqs: [] })));
     renderBuilder();
     await screen.findByRole('heading', { name: 'Quotation builder' });
+    expect(screen.queryByRole('button', { name: 'FAQs' })).not.toBeInTheDocument();
     const doc = await pinnedReady();
     expect(doc.querySelector('[data-preview-section="faqs"]')).toBeNull();
-    const pos = stubPositions(doc);
-    (frameScroller(doc) as HTMLElement).scrollTop = 200;
-    await userEvent.click(await screen.findByRole('button', { name: 'FAQs' }));
-    // The section is absent for this tab: no jump back to the top.
-    await new Promise((resolve) => setTimeout(resolve, 800));
-    expect(pos.readScroll()).toBe(200);
     expect(screen.getByTestId('pinned-preview-frame')).toBeInTheDocument();
   });
 

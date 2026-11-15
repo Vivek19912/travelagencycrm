@@ -255,6 +255,12 @@ const SHOW_VISA_QUOTATION_TAB = false;
 // paths are untouched and existing quotations keep their saved values.
 const SHOW_DESTINATION_EXPERT_TAB = false;
 
+// FAQs is hidden from the quotation builder tab navigation. Set this back to
+// true to restore the tab and panel; the FAQ backend, APIs, master data,
+// quotation save/load paths and public quotation rendering are untouched and
+// existing quotations keep their saved FAQs.
+export const SHOW_FAQS_QUOTATION_TAB = false;
+
 /**
  * Predefined Label suggestions for Additional Price Items (By Traveler
  * pricing). Exactly these two — free-text labels remain fully supported and
@@ -576,7 +582,9 @@ const TABS: TabDef[] = [
   { key: 'addon', label: 'Add-on Services', types: ADDON_TYPES },
   { key: 'inclusions', label: 'Inclusions & Exclusions' },
   ...(SHOW_DESTINATION_EXPERT_TAB ? [{ key: 'destinationExpert', label: 'Destination Expert' }] : []),
-  { key: 'faqs', label: 'FAQs' },
+  // FAQs is hidden from the builder tab navigation (see SHOW_FAQS_QUOTATION_TAB);
+  // the FAQ data model, save/load paths and public rendering are untouched.
+  ...(SHOW_FAQS_QUOTATION_TAB ? [{ key: 'faqs', label: 'FAQs' }] : []),
   { key: 'summary', label: 'Pricing' },
   { key: 'pricingBreakdown', label: 'Pricing Breakdown' },
   { key: 'setting', label: 'Settings' },
@@ -2819,6 +2827,13 @@ export function QuotationBuilderPage() {
   useEffect(() => {
     if (!SHOW_DESTINATION_EXPERT_TAB && activeTab === 'destinationExpert') setActiveTab('setting');
   }, [activeTab]);
+  // FAQs is hidden from the tab navigation – a stale `faqs` selection (e.g. an
+  // existing URL/state pointing at the removed tab) falls back to the
+  // neighbouring Inclusions & Exclusions tab instead of a blank panel.
+  // Saved FAQ data is untouched and keeps rendering on the public weblink.
+  useEffect(() => {
+    if (!SHOW_FAQS_QUOTATION_TAB && activeTab === 'faqs') setActiveTab('inclusions');
+  }, [activeTab]);
   // Cruise and Vehicle start excluded: the user explicitly enables them (auto-creating the
   // first entry). Saved quotations with rows re-enable on load.
   const [excluded, setExcluded] = useState<Record<string, boolean>>({ cruise: true, vehicle: true });
@@ -2948,6 +2963,16 @@ export function QuotationBuilderPage() {
   // the section value is identical; plain edits never touch it, so typing can
   // never yank the reader's scroll position.
   const [previewNavRequest, setPreviewNavRequest] = useState(0);
+  // Visibility-change navigation signal for the live preview. Bumped only
+  // when the ACTIVE tab's own section is excluded or restored (via the local
+  // `excluded` map or the form-backed include flags below), so the preview
+  // can follow to the next (or nearest previous) visible section. Toggling
+  // any other tab's checkbox never touches it, so unrelated toggles cannot
+  // disturb the reader's scroll position. Starts undefined so the initial
+  // mount performs no extra navigation beyond the regular tab target.
+  const [previewVisibilityRequest, setPreviewVisibilityRequest] = useState<number | undefined>(
+    undefined,
+  );
   const form = useForm<QuotationVersionInput>({
     resolver: async (values, context, options) => {
       // When a section is excluded, its rows must not be required. Hotel rows
@@ -3033,7 +3058,8 @@ export function QuotationBuilderPage() {
   // resolve to section-level navigation via an empty item list.
   const previewTargetItems = useMemo((): string[] => {
     if (activeTab === 'sightseeing') return [`day:${Math.max(0, activeSightseeingDay)}`];
-    if (activeTab === 'hotel' && lastExpandedHotelRowId) {
+    if (activeTab === 'hotel') {
+      if (excluded.hotel || !lastExpandedHotelRowId) return [];
       if (!(expandedHotels[lastExpandedHotelRowId] ?? false)) return [];
       const position = hotels.fields.findIndex((field) => field.id === lastExpandedHotelRowId);
       return position >= 0 ? [`hotel:${position}`] : [];
@@ -3054,6 +3080,7 @@ export function QuotationBuilderPage() {
     hotels.fields,
     activeFlightIndex,
     flightRecords.fields,
+    excluded.hotel,
   ]);
   const airlines = useAirlines(
     useMemo(() => new URLSearchParams({ status: 'ACTIVE', pageSize: '100' }), []),
@@ -4281,6 +4308,54 @@ export function QuotationBuilderPage() {
   ]);
   const watchedServices = useWatch({ control: form.control, name: 'services' });
   const watchedAddOnInclude = useWatch({ control: form.control, name: 'addOnDetails.include' });
+  const watchedFlightInclude = useWatch({ control: form.control, name: 'flightDetails.include' });
+  const watchedSightseeingInclude = useWatch({
+    control: form.control,
+    name: 'sightseeingDetails.include',
+  });
+  // Follow visibility of the ACTIVE tab's section only: when its own Include
+  // checkbox is toggled (local `excluded` map for hotel/cruise/vehicle, form
+  // flags for sightseeing/flight/add-ons), bump the preview's visibility
+  // signal so it navigates to the restored section — or, when just
+  // excluded, to the next (or nearest previous) visible section. Toggling
+  // any other tab never bumps, so unrelated changes cannot move the reader.
+  const prevSectionVisibilityRef = useRef<{
+    excludedHotel: boolean;
+    excludedCruise: boolean;
+    excludedVehicle: boolean;
+    flightInclude: unknown;
+    addOnInclude: unknown;
+    sightseeingInclude: unknown;
+  } | null>(null);
+  useEffect(() => {
+    const current = {
+      excludedHotel: excluded.hotel === true,
+      excludedCruise: excluded.cruise === true,
+      excludedVehicle: excluded.vehicle === true,
+      flightInclude: watchedFlightInclude,
+      addOnInclude: watchedAddOnInclude,
+      sightseeingInclude: watchedSightseeingInclude,
+    };
+    const prev = prevSectionVisibilityRef.current;
+    prevSectionVisibilityRef.current = current;
+    if (!prev) return;
+    const activeVisibilityChanged =
+      (activeTab === 'hotel' && prev.excludedHotel !== current.excludedHotel) ||
+      (activeTab === 'cruise' && prev.excludedCruise !== current.excludedCruise) ||
+      (activeTab === 'vehicle' && prev.excludedVehicle !== current.excludedVehicle) ||
+      (activeTab === 'flight' && prev.flightInclude !== current.flightInclude) ||
+      (activeTab === 'addon' && prev.addOnInclude !== current.addOnInclude) ||
+      (activeTab === 'sightseeing' && prev.sightseeingInclude !== current.sightseeingInclude);
+    if (activeVisibilityChanged) {
+      setPreviewVisibilityRequest((request) => (request ?? 0) + 1);
+    }
+  }, [
+    excluded,
+    watchedFlightInclude,
+    watchedAddOnInclude,
+    watchedSightseeingInclude,
+    activeTab,
+  ]);
   const markupMode = useWatch({ control: form.control, name: 'markupMode' });
   const markupValue = useWatch({ control: form.control, name: 'markupValue' }) ?? 0;
   const taxRate = useWatch({ control: form.control, name: 'taxRate' }) ?? 0;
@@ -8282,8 +8357,11 @@ export function QuotationBuilderPage() {
           </div>
         )}
 
-        {/* FAQs — quotation-level weblink content. */}
-        {activeTab === 'faqs' && (
+        {/* FAQs panel is hidden from the builder tab navigation
+            (see SHOW_FAQS_QUOTATION_TAB). The `faqs` form values, save/load
+            paths and public weblink rendering are untouched, so existing
+            quotations keep their saved FAQs. */}
+        {SHOW_FAQS_QUOTATION_TAB && activeTab === 'faqs' && (
           <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="max-w-xl text-xs text-slate-500">
@@ -10446,6 +10524,8 @@ export function QuotationBuilderPage() {
             activeSection={previewSectionForBuilderTab(activeTab)}
             activeItems={previewTargetItems}
             navigationKey={previewNavRequest}
+            visibilityKey={previewVisibilityRequest}
+            excluded={excluded}
           />
         </aside>
       )}

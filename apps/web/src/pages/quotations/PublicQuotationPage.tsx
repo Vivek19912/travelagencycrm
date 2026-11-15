@@ -32,7 +32,6 @@ import { useParams } from 'react-router-dom';
 import {
   formatDayPrefixedTitle,
   formatItineraryDayTitle,
-  formatAgeList,
   formatInfantAgeList,
   hotelStayNights,
   isItineraryActivityTitleDuplicate,
@@ -314,6 +313,25 @@ export const publicSightseeingSectionTitle = (value: string | null | undefined) 
   const title = value?.trim();
   return !title || title === 'Sightseeing & Experiences' ? 'Your Itinerary' : title;
 };
+
+/**
+ * Weblink-only CWB/CWOB age display: `3 years, 2 years` (`1 year` singular),
+ * order preserved. Same null/empty/invalid semantics as the shared
+ * `formatAgeList` (absent data yields null so the age line is omitted; blank,
+ * null, non-numeric and negative entries are skipped) — only each value
+ * carries an explicit year unit so customers never misread bare numbers.
+ * Local to this renderer, which also drives the Weblink PDF (`?pdf=weblink`),
+ * so the Classic and Style PDFs keep their existing `formatAgeList` output.
+ */
+export function formatChildAgeListYears(ages: unknown): string | null {
+  if (!Array.isArray(ages)) return null;
+  const list = ages
+    .filter((age) => age != null && `${age}`.trim() !== '')
+    .map((age) => Number(age))
+    .filter((age) => Number.isFinite(age) && age >= 0);
+  if (!list.length) return null;
+  return list.map((age) => `${age} year${age === 1 ? '' : 's'}`).join(', ');
+}
 
 /**
  * Customer-facing display texts for the weblink hero + profile card.
@@ -2246,8 +2264,12 @@ export function PublicQuotationView({
     .join(', ');
   // Child ages from the Lead — shared with the PDF via the same quotation
   // columns. Null/empty for legacy data → the age cells are simply omitted.
-  const cwbAgesText = formatAgeList(q.childrenWithBedAges);
-  const cwobAgesText = formatAgeList(q.childrenWithoutBedAges);
+  // CWB/CWOB ages render with explicit year units on the weblink
+  // (`1 year`, `3 years, 2 years`, order preserved); invalid entries are
+  // skipped exactly like the shared formatter. Weblink-only: Classic/Style
+  // PDFs keep their existing output via `formatAgeList`.
+  const cwbAgesText = formatChildAgeListYears(q.childrenWithBedAges);
+  const cwobAgesText = formatChildAgeListYears(q.childrenWithoutBedAges);
   const infantAgesText = formatInfantAgeList(q.infantAges);
 
   const pricing = resolveQuotationPricing({ version: v, quotation: q });

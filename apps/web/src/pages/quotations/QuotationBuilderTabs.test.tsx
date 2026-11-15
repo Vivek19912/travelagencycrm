@@ -201,7 +201,7 @@ describe('Quotation Builder sub-tab styling', () => {
       const asterisk = tabButton(name).querySelector('span.text-red-500');
       expect(asterisk?.textContent).toBe('*');
     }
-    expect(tabButton('FAQs').querySelector('span.text-red-500')).toBeNull();
+    expect(tabButton('Pricing').querySelector('span.text-red-500')).toBeNull();
   });
 
   it('switching tabs moves the underline and preserves form values', async () => {
@@ -239,7 +239,6 @@ describe('Quotation Builder sub-tab styling', () => {
       'Flight',
       'Add-on Services',
       'Inclusions & Exclusions',
-      'FAQs',
       'Pricing',
       'Settings',
     ]);

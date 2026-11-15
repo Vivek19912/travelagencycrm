@@ -3,6 +3,10 @@ import { createPortal } from 'react-dom';
 import { useWatch, type Control } from 'react-hook-form';
 import { X } from 'lucide-react';
 import type { ManagedUser, QuotationVersionInput } from '@interscale/shared';
+import {
+  DEFAULT_WEBLINK_SECTION_ORDER,
+  resolveWeblinkSectionOrder,
+} from '@interscale/shared';
 import type {
   Quotation,
   QuotationVersion,
@@ -64,6 +68,51 @@ export interface PreviewTarget {
 export function previewTargetKey(target: PreviewTarget | null | undefined): string {
   if (!target) return '';
   return `${target.section ?? ''}\n${(target.items ?? []).join(',')}`;
+}
+
+/**
+ * Display order of the live preview: the fixed pricing summary first, then
+ * the customer-facing sections in weblink order. `pricing` is rendered above
+ * the ordered nodes by `PublicQuotationView`, so it leads here too.
+ */
+function previewDisplayOrder(canonicalOrder?: readonly string[] | null): string[] {
+  const canonical =
+    canonicalOrder && canonicalOrder.length > 0
+      ? canonicalOrder
+      : DEFAULT_WEBLINK_SECTION_ORDER;
+  return ['pricing', ...canonical];
+}
+
+/**
+ * Fallback section when the requested preview section is absent (e.g. its
+ * Include checkbox was just unchecked while it was displayed): the next
+ * available visible section in display order, or — when nothing follows —
+ * the nearest previous visible section. Returns null when no navigation is
+ * needed (no request, nothing visible) or possible (unknown section, nothing
+ * visible at all), in which case the caller leaves the scroll position alone.
+ * Never returns an excluded or nonexistent section: candidates come only from
+ * sections actually present in the preview. Pure helper, exported for tests.
+ */
+export function nextAvailablePreviewSection(
+  requestedSection: string | null | undefined,
+  visibleSectionIds: readonly string[],
+  canonicalOrder?: readonly string[] | null,
+): string | null {
+  if (!requestedSection || visibleSectionIds.length === 0) return null;
+  const visible = new Set(visibleSectionIds);
+  if (visible.has(requestedSection)) return null;
+  const order = previewDisplayOrder(canonicalOrder);
+  const requestedIndex = order.indexOf(requestedSection);
+  if (requestedIndex === -1) return null;
+  for (let index = requestedIndex + 1; index < order.length; index++) {
+    const candidate = order[index] as string;
+    if (visible.has(candidate)) return candidate;
+  }
+  for (let index = requestedIndex - 1; index >= 0; index--) {
+    const candidate = order[index] as string;
+    if (visible.has(candidate)) return candidate;
+  }
+  return null;
 }
 
 /**
@@ -290,6 +339,7 @@ export function MobilePhonePreview({
   activeSection,
   activeItems,
   navigationKey,
+  visibilityKey,
   frameTestId,
 }: {
   data: PublicQuotation;
@@ -313,12 +363,25 @@ export function MobilePhonePreview({
    * same-value state update) still navigates the preview to its section.
    */
   navigationKey?: number | string | undefined;
+  /**
+   * Visibility-change navigation signal: bumped when the active tab's section
+   * becomes excluded or is restored. Navigates to the requested section when
+   * present; when it is absent (just excluded), navigates to the next
+   * available visible section — or the nearest previous one when nothing
+   * follows — instead of leaving stale content in view.
+   */
+  visibilityKey?: number | string | undefined;
   /** Test id for the iframe element itself. */
   frameTestId: string;
 }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const mountNode = usePreviewFrameDocument(iframeRef);
   const { areaRef, scale, measured } = usePhoneFitScale();
+  // Latest preview data for the visibility effect below, which only re-runs
+  // on `visibilityKey` (never on keystrokes) but must resolve the fallback
+  // against the current render, not a stale closure.
+  const dataRef = useRef(data);
+  dataRef.current = data;
   // String key: the effect below must fire only when the intended target
   // changes — never on keystrokes (which re-render with new form objects but
   // an identical section/item combination).
@@ -399,6 +462,105 @@ export function MobilePhonePreview({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mountNode, targetKey, navigationKey]);
 
+  // Visibility-change navigation: the builder bumps `visibilityKey` when the
+  // active tab's section is excluded or restored. When the requested section
+  // is present (restored, or still visible) it wins, exactly like tab
+  // navigation; when it is absent (just excluded) the preview moves to the
+  // next available visible section — or the nearest previous one when the
+  // excluded section was last — so no stale or empty content stays in view.
+  // Plain tab clicks and keystrokes never touch this key, so normal
+  // navigation and manual scroll positions are undisturbed. Scrolls only the
+  // frame (never the builder page or window).
+  useEffect(() => {
+    if (!mountNode || visibilityKey == null) return;
+    const target: PreviewTarget = { section: activeSection ?? null, items: activeItems ?? [] };
+    if (target.section == null && target.items.length === 0) return;
+    let cancelled = false;
+    let observer: MutationObserver | null = null;
+    let giveUpTimer: ReturnType<typeof setTimeout> | null = null;
+    const scrollerFor = (): HTMLElement | null => {
+      const doc = iframeRef.current?.contentDocument;
+      return (doc?.scrollingElement ?? doc?.documentElement ?? null) as HTMLElement | null;
+    };
+    const visibleSections = (): string[] => {
+      const doc = iframeRef.current?.contentDocument;
+      if (!doc) return [];
+      return Array.from(doc.querySelectorAll<HTMLElement>('[data-preview-section]'))
+        .map((node) => node.getAttribute('data-preview-section') ?? '')
+        .filter((id) => id.length > 0);
+    };
+    const resolveTarget = (): PreviewTarget | null => {
+      const doc = iframeRef.current?.contentDocument;
+      if (!doc) return null;
+      const items = target.items ?? [];
+      for (const item of items) {
+        if (item && doc.querySelector<HTMLElement>(`[data-preview-item="${item}"]`)) {
+          return { section: target.section, items: [item] };
+        }
+      }
+      if (
+        target.section &&
+        doc.querySelector<HTMLElement>(`[data-preview-section="${target.section}"]`)
+      ) {
+        return { section: target.section, items: [] };
+      }
+      const fallback = nextAvailablePreviewSection(
+        target.section,
+        visibleSections(),
+        resolveWeblinkSectionOrder(
+          (dataRef.current.version as unknown as { weblinkSectionOrder?: unknown })
+            ?.weblinkSectionOrder,
+        ),
+      );
+      return fallback ? { section: fallback, items: [] } : null;
+    };
+    const tryScroll = (): boolean => {
+      if (cancelled) return true;
+      const scroller = scrollerFor();
+      const resolved = resolveTarget();
+      if (!scroller || !resolved) return false;
+      scrollPreviewToTarget(scroller, resolved);
+      return true;
+    };
+    if (tryScroll()) return;
+    // The exclusion render may not have committed yet; retry briefly, then
+    // give up so later unrelated edits can never scroll-jack the reader.
+    if (typeof MutationObserver !== 'undefined') {
+      const doc = iframeRef.current?.contentDocument;
+      const root = doc?.documentElement ?? doc?.body ?? null;
+      if (root) {
+        observer = new MutationObserver(() => {
+          if (tryScroll()) {
+            observer?.disconnect();
+            observer = null;
+            if (giveUpTimer) {
+              clearTimeout(giveUpTimer);
+              giveUpTimer = null;
+            }
+          }
+        });
+        observer.observe(root, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['data-preview-section', 'data-preview-item'],
+        });
+        giveUpTimer = setTimeout(() => {
+          observer?.disconnect();
+          observer = null;
+        }, 2000);
+      }
+    }
+    return () => {
+      cancelled = true;
+      observer?.disconnect();
+      if (giveUpTimer) clearTimeout(giveUpTimer);
+    };
+    // Only visibility changes re-run this; `data` is read via ref so
+    // keystrokes never retrigger navigation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mountNode, visibilityKey]);
+
   return (
     <div
       data-testid="mobile-phone-frame"
@@ -468,6 +630,7 @@ export function MobilePhonePreview({
 export function previewSectionForBuilderTab(tab: string | null | undefined): string | null {
   switch (tab) {
     case 'pricingMethod':
+    case 'pricingBreakdown':
     case 'summary':
       return 'pricing';
     case 'flight':
@@ -489,6 +652,55 @@ export function previewSectionForBuilderTab(tab: string | null | undefined): str
     default:
       return null;
   }
+}
+
+/**
+ * Builder `excluded` state (local unsaved Include-checkbox state for hotel,
+ * cruise and vehicle, plus any generic service tab) applied to a preview
+ * version copy. The builder deliberately keeps excluded rows in the form so
+ * re-checking restores data; the live preview must hide them without
+ * mutating the authoritative form state. Form-backed include flags
+ * (sightseeing / flight / add-on) are already respected by
+ * `PublicQuotationView` and are re-applied here only when `excluded` carries
+ * an explicit entry, so both mechanisms stay consistent.
+ */
+export function applyPreviewExclusions<T extends Record<string, unknown>>(
+  version: T,
+  excluded?: Record<string, boolean> | null | undefined,
+): T {
+  if (!excluded) return version;
+  const isExcluded = (key: string) => excluded[key] === true;
+  if (!isExcluded('hotel') && !isExcluded('cruise') && !isExcluded('vehicle') &&
+      !isExcluded('sightseeing') && !isExcluded('flight') && !isExcluded('addon')) {
+    return version;
+  }
+  const next = { ...(version as Record<string, unknown>) } as Record<string, unknown>;
+  if (isExcluded('cruise') || isExcluded('vehicle')) {
+    const services = Array.isArray(next.services) ? (next.services as Array<Record<string, unknown>>) : [];
+    next.services = services.filter((service) => {
+      const type = (service as { serviceType?: string })?.serviceType;
+      if (isExcluded('cruise') && type === 'CRUISE') return false;
+      if (isExcluded('vehicle') && type === 'VEHICLE_TRANSFER') return false;
+      return true;
+    });
+  }
+  if (isExcluded('hotel')) {
+    const hotelDetails = (next.hotelDetails ?? {}) as Record<string, unknown>;
+    next.hotelDetails = { ...hotelDetails, include: false };
+  }
+  if (isExcluded('sightseeing')) {
+    const details = (next.sightseeingDetails ?? {}) as Record<string, unknown>;
+    next.sightseeingDetails = { ...details, include: false };
+  }
+  if (isExcluded('flight')) {
+    const details = (next.flightDetails ?? {}) as Record<string, unknown>;
+    next.flightDetails = { ...details, include: false };
+  }
+  if (isExcluded('addon')) {
+    const details = (next.addOnDetails ?? {}) as Record<string, unknown>;
+    next.addOnDetails = { ...details, include: false };
+  }
+  return next as T;
 }
 
 /**
@@ -671,6 +883,12 @@ export function buildFullPreviewData(input: {
   sightseeingPreviewUrls?: Record<string, string> | null | undefined;
   /** Already-loaded team members for the destination-expert preview. */
   expertUsers?: ManagedUser[] | null | undefined;
+  /**
+   * Builder `excluded` map (Include-checkbox state). Excluded hotel/cruise/
+   * vehicle rows stay in `form` so re-checking restores them, but the preview
+   * copy hides them so navigation and content match the saved weblink.
+   */
+  excluded?: Record<string, boolean> | null | undefined;
 }): PublicQuotation {
   const {
     quotation,
@@ -681,6 +899,7 @@ export function buildFullPreviewData(input: {
     presentations,
     sightseeingPreviewUrls,
     expertUsers,
+    excluded,
   } = input;
   const profile = settings?.profile;
   const branding = settings?.branding;
@@ -767,11 +986,17 @@ export function buildFullPreviewData(input: {
     // identity, lifecycle, and attribution stay with the saved version.
     // Sightseeing days carry the position-derived numbering above so the
     // shared public renderer displays the current unsaved order.
-    version: {
-      ...savedVersion,
-      ...form,
-      sightseeingDetails: previewSightseeingDetails,
-    } as unknown as QuotationVersion,
+    // `excluded` (unchecked Include checkboxes) hides hotel/cruise/vehicle
+    // in this preview-only copy; `form` itself is never mutated so
+    // re-checking restores the existing rows.
+    version: applyPreviewExclusions(
+      {
+        ...savedVersion,
+        ...form,
+        sightseeingDetails: previewSightseeingDetails,
+      } as unknown as Record<string, unknown>,
+      excluded,
+    ) as unknown as QuotationVersion,
     heroImageUrl: resolved.heroImageUrl,
     hotelPresentations: resolved.hotelPresentations,
     vehiclePresentations: resolved.vehiclePresentations,
@@ -811,6 +1036,8 @@ function useFullPreviewData(input: {
   sightseeingPreviewUrls?: Record<string, string> | null | undefined;
   /** Already-loaded team members for the destination-expert preview. */
   expertUsers?: ManagedUser[] | null | undefined;
+  /** Builder Include-checkbox state; hides excluded sections preview-only. */
+  excluded?: Record<string, boolean> | null | undefined;
 }): PublicQuotation {
   const {
     quotation,
@@ -821,6 +1048,7 @@ function useFullPreviewData(input: {
     masters,
     sightseeingPreviewUrls,
     expertUsers,
+    excluded,
   } = input;
   const live = useWatch({ control }) as unknown as QuotationVersionInput;
   const query = ((quotation as { query?: unknown }).query ?? {}) as Quotation['query'] & {
@@ -865,8 +1093,9 @@ function useFullPreviewData(input: {
       presentations,
       sightseeingPreviewUrls,
       expertUsers,
+      excluded,
     });
-  }, [quotation, savedVersion, live, settings, flightPreviewUrls, presentations, sightseeingPreviewUrls, expertUsers]);
+  }, [quotation, savedVersion, live, settings, flightPreviewUrls, presentations, sightseeingPreviewUrls, expertUsers, excluded]);
 }
 /**
  * Persistent side-by-side live weblink preview for the Quotation Builder.
@@ -892,6 +1121,8 @@ export function PinnedLiveQuotationPreview({
   activeSection,
   activeItems,
   navigationKey,
+  visibilityKey,
+  excluded,
 }: {
   quotation: Quotation;
   savedVersion: QuotationVersion;
@@ -923,6 +1154,14 @@ export function PinnedLiveQuotationPreview({
    * builder tab).
    */
   navigationKey?: number | string | undefined;
+  /**
+   * Visibility-change navigation signal forwarded to the phone: bumped when
+   * the active tab's section becomes excluded or is restored, so the preview
+   * follows to the next (or nearest previous) visible section.
+   */
+  visibilityKey?: number | string | undefined;
+  /** Builder Include-checkbox state; hides excluded sections preview-only. */
+  excluded?: Record<string, boolean> | null | undefined;
 }) {
   const data = useFullPreviewData({
     quotation,
@@ -933,6 +1172,7 @@ export function PinnedLiveQuotationPreview({
     masters,
     sightseeingPreviewUrls,
     expertUsers,
+    excluded,
   });
 
   useEffect(() => {
@@ -964,6 +1204,7 @@ export function PinnedLiveQuotationPreview({
           activeSection={activeSection ?? null}
           activeItems={activeItems ?? null}
           navigationKey={navigationKey}
+          visibilityKey={visibilityKey}
           frameTestId="pinned-preview-frame"
         />
       </div>

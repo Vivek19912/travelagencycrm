@@ -967,11 +967,9 @@ describe('Phase 8 quotation pages', () => {
       expect(tab.textContent).toContain('*');
     }
     expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument();
-    const destinationExpertTab = screen.getByRole('button', { name: 'Destination Expert' });
-    const faqsTab = screen.getByRole('button', { name: 'FAQs' });
-    expect(
-      destinationExpertTab.compareDocumentPosition(faqsTab) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    // The hidden Destination Expert and FAQs tabs are not in the tab bar.
+    expect(screen.queryByRole('button', { name: 'Destination Expert' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'FAQs' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Setting' })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Settings' }));
@@ -987,10 +985,6 @@ describe('Phase 8 quotation pages', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /Weblink Section Order/i }));
     expect(screen.getByRole('button', { name: 'Reset to default order' })).toBeInTheDocument();
-
-    await userEvent.click(destinationExpertTab);
-    expect(screen.getByRole('heading', { name: 'Destination Expert' })).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Quotation Settings' })).not.toBeInTheDocument();
   });
 
   it('runs revision, PDF and public-link actions from the detail page', async () => {

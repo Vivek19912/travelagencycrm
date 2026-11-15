@@ -9,6 +9,8 @@ function publicQuotation(ages: {
   infantAges?: number[] | null;
   childrenWithBed?: number;
   childrenWithBedAges?: number[] | null;
+  childrenWithoutBed?: number;
+  childrenWithoutBedAges?: number[] | null;
 }) {
   return {
     company: {
@@ -32,11 +34,11 @@ function publicQuotation(ages: {
       travelEndDate: null,
       adults: 2,
       childrenWithBed: ages.childrenWithBed ?? 0,
-      childrenWithoutBed: 0,
+      childrenWithoutBed: ages.childrenWithoutBed ?? 0,
       infants: ages.infants ?? 0,
       rooms: 1,
       childrenWithBedAges: ages.childrenWithBedAges ?? null,
-      childrenWithoutBedAges: null,
+      childrenWithoutBedAges: ages.childrenWithoutBedAges ?? null,
       infantAges: ages.infantAges ?? null,
       validUntil: null,
       createdAt: '2026-08-04T10:00:00.000Z',
@@ -124,7 +126,7 @@ describe('Infant Ages - Weblink', () => {
     expect(screen.queryByText('Infant Ages')).not.toBeInTheDocument();
   });
 
-  it('keeps CWB age formatting unchanged (years, no unit)', async () => {
+  it('shows CWB ages with explicit year units (singular/plural)', async () => {
     vi.stubGlobal(
       'fetch',
       mockFetch({ infants: 1, infantAges: [8], childrenWithBed: 1, childrenWithBedAges: [8, 10] }),
@@ -132,7 +134,48 @@ describe('Infant Ages - Weblink', () => {
     renderWeblink();
     await screen.findByText('Custom Package for Aarav Mehta');
     expect(screen.getAllByText('CWB Ages').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('8, 10').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('8 years, 10 years').length).toBeGreaterThan(0);
     expect(screen.getAllByText('8 months').length).toBeGreaterThan(0);
+  });
+
+  it('uses the singular year for age 1', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({ childrenWithBed: 2, childrenWithBedAges: [1, 2] }),
+    );
+    renderWeblink();
+    await screen.findByText('Custom Package for Aarav Mehta');
+    expect(screen.getAllByText('1 year, 2 years').length).toBeGreaterThan(0);
+  });
+
+  it('shows CWOB ages with explicit year units', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({ childrenWithoutBed: 3, childrenWithoutBedAges: [1, 2, 4] }),
+    );
+    renderWeblink();
+    await screen.findByText('Custom Package for Aarav Mehta');
+    expect(screen.getAllByText('CWOB Ages').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('1 year, 2 years, 4 years').length).toBeGreaterThan(0);
+  });
+
+  it('omits the CWB Ages line when ages are missing', async () => {
+    vi.stubGlobal('fetch', mockFetch({ childrenWithBed: 1, childrenWithBedAges: null }));
+    renderWeblink();
+    await screen.findByText('Custom Package for Aarav Mehta');
+    expect(screen.queryByText('CWB Ages')).not.toBeInTheDocument();
+  });
+});
+
+describe('formatChildAgeListYears', () => {
+  it('formats singular/plural, preserves order, and skips invalid values', async () => {
+    const { formatChildAgeListYears } = await import('./PublicQuotationPage');
+    expect(formatChildAgeListYears([3, 2])).toBe('3 years, 2 years');
+    expect(formatChildAgeListYears([1])).toBe('1 year');
+    expect(formatChildAgeListYears([1, 2, 4])).toBe('1 year, 2 years, 4 years');
+    expect(formatChildAgeListYears([8, null, 10])).toBe('8 years, 10 years');
+    expect(formatChildAgeListYears(null)).toBeNull();
+    expect(formatChildAgeListYears([])).toBeNull();
+    expect(formatChildAgeListYears([null, undefined, ''])).toBeNull();
   });
 });

@@ -59,6 +59,11 @@ export const SHOW_REPORTS_NAVIGATION = false;
 // restore it; routes, pages, permissions, APIs and data are untouched.
 export const SHOW_REMINDERS_NAVIGATION = false;
 
+// The "FAQs" masters item is hidden from the sidebar navigation. Set this
+// back to true to restore it; the route, pages, APIs, permissions and
+// database data are untouched.
+export const SHOW_FAQS_MASTER_NAVIGATION = false;
+
 // The standalone "Customers" and "Vendors" modules are retired from the
 // user-facing UI. Set these back to true to restore them; their routes,
 // pages, permissions, APIs and data are untouched.
@@ -405,14 +410,18 @@ export const NAV_ITEMS: readonly NavItem[] = [
             },
           ]
         : []),
-      {
-        label: 'FAQs',
-        to: '/masters/faqs',
-        icon: FileText,
-        available: true,
-        permission: PERMISSIONS.MASTER_FAQS_VIEW,
-        section: NAV_SECTION.MASTERS,
-      },
+      ...(SHOW_FAQS_MASTER_NAVIGATION
+        ? [
+            {
+              label: 'FAQs',
+              to: '/masters/faqs',
+              icon: FileText,
+              available: true,
+              permission: PERMISSIONS.MASTER_FAQS_VIEW,
+              section: NAV_SECTION.MASTERS,
+            },
+          ]
+        : []),
       ...(SHOW_VISA_TYPES_MASTER_NAVIGATION
         ? [
             {
