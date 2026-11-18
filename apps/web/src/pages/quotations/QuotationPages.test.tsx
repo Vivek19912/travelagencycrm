@@ -19901,7 +19901,7 @@ describe('Generate PDF button — real request, open, loading and error states',
     expect(openSpy).toHaveBeenCalledWith('about:blank', '_blank');
   });
 
-  it('opens the Stylish PDF cover flow and generates with the destination image', async () => {
+  it('generates the Stylish PDF directly with the automatic destination image', async () => {
     const tab = pdfTab();
     vi.spyOn(window, 'open').mockReturnValue(tab);
     const fetchMock = vi.fn(async (input: RequestInfo | URL, _options?: RequestInit) => {
@@ -19924,11 +19924,15 @@ describe('Generate PDF button — real request, open, loading and error states',
     renderDetails();
     await screen.findByText('Activity timeline');
     await userEvent.click(screen.getByRole('button', { name: 'Generate PDF' }));
+    // No Weblink PDF card in the style modal.
+    expect(screen.queryByRole('button', { name: /Weblink PDF/ })).not.toBeInTheDocument();
     const stylish = screen.getByRole('button', { name: /Stylish PDF/ });
     await userEvent.click(stylish);
-    expect(screen.getByRole('dialog', { name: 'Choose first-page image' })).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: /Use destination image/ })).toBeChecked();
-    await userEvent.click(screen.getByRole('button', { name: 'Generate Stylish PDF' }));
+    // No intermediate image modal: generation starts immediately with defaults.
+    expect(
+      screen.queryByRole('dialog', { name: 'Choose first-page image' }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Choose PDF style' })).not.toBeInTheDocument();
     await waitFor(() =>
       expect(tab.location.replace).toHaveBeenCalledWith(
         'https://files.example.test/stylish-quotation.pdf',
@@ -19940,6 +19944,10 @@ describe('Generate PDF button — real request, open, loading and error states',
       style: 'STYLISH',
       coverSource: 'DESTINATION',
     });
+    // No manual uploads ride along: the server applies the destination image,
+    // the default gallery cards and any saved Page 1 defaults automatically.
+    expect(JSON.parse(String(genCall![1]?.body))).not.toHaveProperty('coverImageDataUrl');
+    expect(JSON.parse(String(genCall![1]?.body))).not.toHaveProperty('page1CardImageDataUrls');
   });
 
   it('closes the temporary tab and shows an error when generation fails', async () => {
@@ -19996,7 +20004,7 @@ describe('Generate PDF button — real request, open, loading and error states',
   });
 });
 
-describe('Weblink PDF option — third PDF style', () => {
+describe('PDF style modal — Classic and Stylish only', () => {
   const finalizedVersion = {
     id: 'version-1',
     versionNumber: 1,
@@ -20065,12 +20073,6 @@ describe('Weblink PDF option — third PDF style', () => {
     emailLogs: [],
     activityTimeline: [],
   };
-  const errorResponse = () =>
-    ({
-      ok: false,
-      status: 500,
-      json: async () => ({ success: false, error: { code: 'INTERNAL_ERROR', message: 'boom' } }),
-    }) as Response;
 
   beforeEach(() => {
     vi.unstubAllGlobals();
@@ -20099,24 +20101,24 @@ describe('Weblink PDF option — third PDF style', () => {
     expect(screen.getByRole('dialog', { name: 'Choose PDF style' })).toBeInTheDocument();
   };
 
-  it('lists Weblink PDF alongside Classic and Stylish without changing them', async () => {
+  it('lists only Classic and Stylish without a Weblink PDF card', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => response(detail)));
     renderDetails();
     await openPopup();
     expect(screen.getByRole('button', { name: /Classic PDF/ })).toBeEnabled();
     expect(screen.getByRole('button', { name: /Stylish PDF/ })).toBeEnabled();
-    expect(screen.getByRole('button', { name: /Weblink PDF/ })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: /Weblink PDF/ })).not.toBeInTheDocument();
   });
 
-  it('generates the Weblink PDF and opens it inline in a new tab', async () => {
+  it('starts Stylish generation directly with automatic defaults', async () => {
     const tab = pdfTab();
-    const openSpy = vi.spyOn(window, 'open').mockReturnValue(tab);
+    vi.spyOn(window, 'open').mockReturnValue(tab);
     const fetchMock = vi.fn(async (input: RequestInfo | URL, _options?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/generate-pdf'))
-        return response({ id: 'doc-weblink', fileName: 'aarav-mehta-quotation.pdf' });
+        return response({ id: 'doc-stylish', fileName: 'stylish-quotation.pdf' });
       if (url.includes('/download-url'))
-        return response({ url: 'https://files.example.test/weblink-quotation.pdf' });
+        return response({ url: 'https://files.example.test/stylish-quotation.pdf' });
       if (url.endsWith('/weblink-analytics'))
         return response({ totalViews: 0, externalViews: 0, homeIpViews: 0, uniqueIps: 0, entries: [] });
       return response(detail);
@@ -20124,60 +20126,23 @@ describe('Weblink PDF option — third PDF style', () => {
     vi.stubGlobal('fetch', fetchMock);
     renderDetails();
     await openPopup();
-    await userEvent.click(screen.getByRole('button', { name: /Weblink PDF/ }));
+    await userEvent.click(screen.getByRole('button', { name: /Stylish PDF/ }));
+    expect(
+      screen.queryByRole('dialog', { name: 'Choose first-page image' }),
+    ).not.toBeInTheDocument();
     await waitFor(() =>
       expect(tab.location.replace).toHaveBeenCalledWith(
-        'https://files.example.test/weblink-quotation.pdf',
+        'https://files.example.test/stylish-quotation.pdf',
       ),
     );
     const genCall = fetchMock.mock.calls.find(([u]) => String(u).endsWith('/generate-pdf'));
-    expect(String(genCall![0])).toContain('/versions/version-1/generate-pdf');
-    // Same workflow shape as Classic: forced fresh generation, inline open.
-    expect(JSON.parse(String(genCall![1]?.body))).toEqual({ force: true, style: 'WEBLINK' });
-    expect(
-      fetchMock.mock.calls.some(([u]) => String(u).includes('/download-url?disposition=inline')),
-    ).toBe(true);
-    expect(openSpy).toHaveBeenCalledWith('about:blank', '_blank');
-  });
-
-  it('disables reselection while Weblink generation is pending', async () => {
-    vi.spyOn(window, 'open').mockReturnValue(pdfTab());
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.endsWith('/generate-pdf')) return new Promise<Response>(() => {});
-      if (url.includes('/download-url'))
-        return response({ url: 'https://files.example.test/weblink.pdf' });
-      return response(detail);
+    // Automatic/default image selection: destination hero, default gallery
+    // cards and saved Page 1 defaults applied by the server — no uploads.
+    expect(JSON.parse(String(genCall![1]?.body))).toEqual({
+      force: true,
+      style: 'STYLISH',
+      coverSource: 'DESTINATION',
     });
-    vi.stubGlobal('fetch', fetchMock);
-    renderDetails();
-    await openPopup();
-    await userEvent.click(screen.getByRole('button', { name: /Weblink PDF/ }));
-    // While pending the entry button is busy and disabled, so a second
-    // selection cannot start a duplicate request.
-    const busy = await screen.findByRole('button', { name: /Generating PDF/ });
-    expect(busy).toBeDisabled();
-    expect(fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/generate-pdf')).length).toBe(
-      1,
-    );
-  });
-
-  it('closes the temporary tab and shows an error when Weblink generation fails', async () => {
-    const tab = pdfTab();
-    vi.spyOn(window, 'open').mockReturnValue(tab);
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.endsWith('/generate-pdf')) return errorResponse();
-      return response(detail);
-    });
-    vi.stubGlobal('fetch', fetchMock);
-    renderDetails();
-    await openPopup();
-    await userEvent.click(screen.getByRole('button', { name: /Weblink PDF/ }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'PDF generation failed. Please try again.',
-    );
-    expect(tab.close).toHaveBeenCalled();
   });
 });
 
