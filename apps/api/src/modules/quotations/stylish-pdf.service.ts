@@ -586,7 +586,7 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
       .lineWidth(0.7)
       .strokeColor('#8ebdff')
       .stroke();
-    if (styledLogo) drawImage(styledLogo, 46, top + 12, 42, 38, 'contain');
+    if (styledLogo) drawImage(styledLogo, 46, top + 12, 42, 38, 'contain', 0);
     else {
       doc
         .font('Bold')
