@@ -123,6 +123,14 @@ export interface PublicQuotation {
     childrenWithoutBedAges?: number[] | null;
     infantAges?: number[] | null;
     createdAt?: string | null;
+    // Authoritative quotation creator contact (resolved server-side from
+    // Quotation.createdBy). Missing fields stay null so the UI omits those
+    // rows instead of substituting the company contact.
+    createdBy?: {
+      fullName: string | null;
+      phone: string | null;
+      email: string | null;
+    } | null;
   };
   version: QuotationVersion;
   heroImageUrl?: string | null;
@@ -2342,7 +2350,14 @@ export function PublicQuotationView({
   if (showVisa) addService('visa', 'Visa');
   if (addonServices.length > 0) addService('add-ons', 'Add-ons');
 
-  const preparedByName = v.createdBy?.fullName ?? '';
+  // Quotation creator contact (authoritative Quotation.createdBy, resolved
+  // server-side). Name falls back to the version creator for legacy payloads
+  // without quotation-level creator data; phone/email are strictly the
+  // creator's own — never the company/owner contact.
+  const creator = q.createdBy ?? null;
+  const preparedByName = creator?.fullName ?? v.createdBy?.fullName ?? '';
+  const preparedByPhone = creator?.phone ?? null;
+  const preparedByEmail = creator?.email ?? null;
   // Profile information card: automatic values resolved from the quotation,
   // then per-item label/value/visibility overrides applied. Display-only.
   const resolvedProfile = resolveWeblinkProfile({
@@ -2359,8 +2374,8 @@ export function PublicQuotationView({
     },
     autoPreparedBy: {
       name: preparedByName,
-      phone: company.phone ?? '',
-      email: company.email ?? '',
+      phone: preparedByPhone ?? '',
+      email: preparedByEmail ?? '',
     },
     overrides: v.weblinkProfile,
   });
@@ -3382,9 +3397,9 @@ export function PublicQuotationView({
           <PublicQuotationContact
             companyName={company.name}
             contactPerson={preparedByName}
-            phone={company.phone}
+            phone={preparedByPhone}
             gstin={company.taxRegistrationNumber}
-            email={company.email}
+            email={preparedByEmail}
             address={company.address}
             googleMapsUrl={company.googleMapsUrl ?? null}
             logoUrl={company.logoUrl}

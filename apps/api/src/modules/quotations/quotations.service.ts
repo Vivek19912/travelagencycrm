@@ -284,6 +284,10 @@ type FullVersion = Prisma.QuotationVersionGetPayload<{ include: typeof versionIn
  *  company branding fields surfaced on the public page/footer. */
 const publicQuotationInclude = {
   ...quotationInclude,
+  // The public Contact Us card must reach the quotation's actual creator, not
+  // the company record: expose the creator's business contact here. Scoped to
+  // the anonymous payload — the shared internal selects stay unchanged.
+  createdBy: { select: { id: true, fullName: true, username: true, phone: true, email: true } },
   company: {
     select: {
       name: true,
@@ -5096,6 +5100,15 @@ export const quotationsService = {
         validUntil: quotation.validUntil,
         createdAt: quotation.createdAt,
         status: quotation.status,
+        // Authoritative quotation creator (Quotation.createdBy): the Contact Us
+        // card and Prepared By line show this person's details. Missing contact
+        // fields stay null so the weblink omits those rows instead of
+        // substituting the company/owner contact.
+        createdBy: {
+          fullName: quotation.createdBy?.fullName ?? null,
+          phone: quotation.createdBy?.phone ?? null,
+          email: quotation.createdBy?.email ?? null,
+        },
       },
       version: await presentVersion(version, false, true),
       downloadUrl,

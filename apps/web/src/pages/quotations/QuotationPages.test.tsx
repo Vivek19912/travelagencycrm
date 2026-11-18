@@ -7964,6 +7964,13 @@ describe('Phase 8 quotation pages', () => {
         rooms: 1,
         validUntil: null,
         status: 'VIEWED',
+        // Quotation creator (salesperson) — Contact Us must show THEIR
+        // contact, never the company/owner contact above.
+        createdBy: {
+          fullName: 'Aditi Rao',
+          phone: '+91 91234 56789',
+          email: 'aditi.rao@alpha.test',
+        },
       },
       version: {
         title: 'Goa proposal',
@@ -8006,23 +8013,31 @@ describe('Phase 8 quotation pages', () => {
     const contactSection = screen.getByRole('heading', { name: 'Contact Us' }).closest('section');
     expect(within(contactSection as HTMLElement).getByText('Aditi Rao')).toBeInTheDocument();
 
-    // Clickable phone and email, plus the address row (scoped to the Contact Us card).
+    // Contact Us shows the QUOTATION CREATOR's phone/email — never the
+    // company/owner contact, which must not appear anywhere in this card
+    // (the price-card "Contact Now" CTA outside the card keeps company info).
     expect(
-      within(contactSection as HTMLElement).getByRole('link', { name: '+91 98765 43210' }),
-    ).toHaveAttribute('href', 'tel:+91 98765 43210');
+      within(contactSection as HTMLElement).getByRole('link', { name: '+91 91234 56789' }),
+    ).toHaveAttribute('href', 'tel:+91 91234 56789');
     expect(
-      within(contactSection as HTMLElement).getByRole('link', { name: 'hello@alpha.test' }),
-    ).toHaveAttribute('href', 'mailto:hello@alpha.test');
+      within(contactSection as HTMLElement).getByRole('link', { name: 'aditi.rao@alpha.test' }),
+    ).toHaveAttribute('href', 'mailto:aditi.rao@alpha.test');
+    expect(
+      within(contactSection as HTMLElement).queryByText('+91 98765 43210'),
+    ).not.toBeInTheDocument();
+    expect(
+      within(contactSection as HTMLElement).queryByText('hello@alpha.test'),
+    ).not.toBeInTheDocument();
     expect(screen.getByText(/1 MG Road, Bengaluru/)).toBeInTheDocument();
 
-    // Action buttons: tel, WhatsApp (new tab, prefilled message), mailto (prefilled).
+    // Action buttons: tel + WhatsApp follow the creator contact.
     expect(screen.getByRole('link', { name: /Call Now/ })).toHaveAttribute(
       'href',
-      'tel:+91 98765 43210',
+      'tel:+91 91234 56789',
     );
     const whatsapp = screen.getByRole('link', { name: /WhatsApp/ });
     const whatsappHref = whatsapp.getAttribute('href') ?? '';
-    expect(whatsappHref.startsWith('https://wa.me/919876543210?text=')).toBe(true);
+    expect(whatsappHref.startsWith('https://wa.me/919123456789?text=')).toBe(true);
     // Normalized phone: spaces/+ stripped, country code preserved.
     expect(whatsappHref).not.toContain('+91');
     // Message includes quotation ID, title and lead/customer name, URL-encoded.
@@ -8031,22 +8046,161 @@ describe('Phase 8 quotation pages', () => {
     expect(whatsappHref).toContain(encodeURIComponent('Aarav Mehta'));
     expect(whatsapp).toHaveAttribute('target', '_blank');
 
-    const email = screen.getByRole('link', { name: /Email/ });
-    const emailHref = email.getAttribute('href') ?? '';
-    expect(emailHref.startsWith('mailto:hello@alpha.test?subject=')).toBe(true);
-    expect(emailHref).toContain(
-      encodeURIComponent('Quotation Inquiry (ID: QT-2026-000001 - Goa proposal for Aarav Mehta)'),
-    );
-    expect(emailHref).toContain(
-      encodeURIComponent(
-        "Hello,\n\nI'm interested in the travel quotation (ID: QT-2026-000001 - Goa proposal for Aarav Mehta).\n\nPlease contact me with more information.",
-      ),
-    );
+    // Company logo in the card (mobile + desktop variants render in jsdom).
+    const logos = within(contactSection as HTMLElement).getAllByAltText('Alpha Travel logo');
+    expect(logos.length).toBeGreaterThanOrEqual(1);
+    for (const logo of logos) {
+      expect(logo).toHaveAttribute('src', 'https://storage.example.test/alpha-logo.png');
+    }
+  });
 
-    // Company logo in the card.
-    expect(screen.getByAltText('Alpha Travel logo')).toHaveAttribute(
-      'src',
-      'https://storage.example.test/alpha-logo.png',
+  it('prefers the quotation creator over the version creator and company contact', async () => {
+    const publicData = {
+      company: {
+        name: 'Alpha Travel',
+        email: 'owner@alpha.test',
+        phone: '+91 90000 00000',
+        website: null,
+        address: '1 MG Road, Bengaluru, Karnataka 560001',
+        primaryColor: '#2563eb',
+        logoUrl: null,
+      },
+      quotation: {
+        quotationNumber: 'QT-2026-000010',
+        customerName: 'Aarav Mehta',
+        destinationSummary: 'Goa',
+        travelStartDate: null,
+        travelEndDate: null,
+        adults: 2,
+        childrenWithBed: 0,
+        childrenWithoutBed: 0,
+        infants: 0,
+        rooms: 1,
+        validUntil: null,
+        status: 'VIEWED',
+        createdBy: {
+          fullName: 'Sales Person A',
+          phone: '+91 91111 22222',
+          email: 'sales.a@alpha.test',
+        },
+      },
+      version: {
+        title: 'Goa proposal',
+        versionNumber: 2,
+        currency: 'INR',
+        finalAmount: '100',
+        createdBy: { id: 'user-9', fullName: 'Coverage Owner', username: 'owner' },
+        hotels: [],
+        services: [],
+        itinerary: [],
+        inclusions: [],
+        exclusions: [],
+        terms: [],
+      },
+      downloadUrl: null,
+    };
+    const fetchMock = vi.fn<(input: RequestInfo | URL, options?: RequestInit) => Promise<Response>>(
+      async () => response(publicData),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    renderWithProviders(
+      <Routes>
+        <Route path="/q/:token" element={<PublicQuotationPage />} />
+      </Routes>,
+      { route: '/q/public-token-value-with-at-least-32-characters' },
+    );
+    await screen.findByText('Custom Package for Aarav Mehta');
+
+    // Contact Us names the quotation creator, not the version creator/owner.
+    const contactSection = screen.getByRole('heading', { name: 'Contact Us' }).closest('section');
+    expect(within(contactSection as HTMLElement).getByText('Sales Person A')).toBeInTheDocument();
+    expect(
+      within(contactSection as HTMLElement).getByRole('link', { name: '+91 91111 22222' }),
+    ).toHaveAttribute('href', 'tel:+91 91111 22222');
+    expect(
+      within(contactSection as HTMLElement).getByRole('link', { name: 'sales.a@alpha.test' }),
+    ).toHaveAttribute('href', 'mailto:sales.a@alpha.test');
+    expect(
+      within(contactSection as HTMLElement).queryByText('Coverage Owner'),
+    ).not.toBeInTheDocument();
+    expect(
+      within(contactSection as HTMLElement).queryByText('+91 90000 00000'),
+    ).not.toBeInTheDocument();
+
+    // Prepared By mirrors the same creator.
+    const prepared = screen.getByText('Prepared By').parentElement!;
+    expect(prepared).toHaveTextContent('Sales Person A');
+    expect(prepared.querySelector('a[href^="tel:"]')).toHaveAttribute('href', 'tel:+91 91111 22222');
+  });
+
+  it('omits creator contact rows when the creator has no contact details', async () => {
+    const publicData = {
+      company: {
+        name: 'Alpha Travel',
+        email: 'owner@alpha.test',
+        phone: '+91 90000 00000',
+        website: null,
+        address: null,
+        primaryColor: '#2563eb',
+        logoUrl: null,
+      },
+      quotation: {
+        quotationNumber: 'QT-2026-000011',
+        customerName: 'Aarav Mehta',
+        destinationSummary: 'Goa',
+        travelStartDate: null,
+        travelEndDate: null,
+        adults: 2,
+        childrenWithBed: 0,
+        childrenWithoutBed: 0,
+        infants: 0,
+        rooms: 1,
+        validUntil: null,
+        status: 'VIEWED',
+        createdBy: { fullName: 'Sales Person B', phone: null, email: null },
+      },
+      version: {
+        title: 'Goa proposal',
+        versionNumber: 1,
+        currency: 'INR',
+        finalAmount: '100',
+        hotels: [],
+        services: [],
+        itinerary: [],
+        inclusions: [],
+        exclusions: [],
+        terms: [],
+      },
+      downloadUrl: null,
+    };
+    const fetchMock = vi.fn<(input: RequestInfo | URL, options?: RequestInit) => Promise<Response>>(
+      async () => response(publicData),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    renderWithProviders(
+      <Routes>
+        <Route path="/q/:token" element={<PublicQuotationPage />} />
+      </Routes>,
+      { route: '/q/public-token-value-with-at-least-32-characters' },
+    );
+    await screen.findByText('Custom Package for Aarav Mehta');
+
+    // Name still shows; phone/email rows are omitted and the owner contact is
+    // never substituted.
+    const contactSection = screen.getByRole('heading', { name: 'Contact Us' }).closest('section');
+    expect(within(contactSection as HTMLElement).getByText('Sales Person B')).toBeInTheDocument();
+    expect(within(contactSection as HTMLElement).queryByRole('link')).not.toBeInTheDocument();
+    expect(
+      within(contactSection as HTMLElement).queryByText('+91 90000 00000'),
+    ).not.toBeInTheDocument();
+    expect(
+      within(contactSection as HTMLElement).queryByText('owner@alpha.test'),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /WhatsApp/ })).not.toBeInTheDocument();
+    // The price-card "Contact Now" CTA stays company-level (out of scope).
+    expect(screen.getByRole('link', { name: /Contact Now/ })).toHaveAttribute(
+      'href',
+      'tel:+91 90000 00000',
     );
   });
 
@@ -8136,11 +8290,11 @@ describe('Phase 8 quotation pages', () => {
     expect(screen.queryByRole('link', { name: /Find us on Google Maps/ })).not.toBeInTheDocument();
   });
 
-  it('prefills WhatsApp and Email without duplicating a lead name already in the title', async () => {
+  it('prefills WhatsApp without duplicating a lead name already in the title', async () => {
     const publicData = {
       company: {
         name: 'Alpha Travel',
-        email: 'hello@alpha.test',
+        email: 'owner@alpha.test',
         phone: '+91 90000 00000',
         website: null,
         address: null,
@@ -8159,6 +8313,11 @@ describe('Phase 8 quotation pages', () => {
         rooms: 1,
         validUntil: null,
         status: 'VIEWED',
+        createdBy: {
+          fullName: 'Sales Person A',
+          phone: '+91 91111 22222',
+          email: 'sales.a@alpha.test',
+        },
       },
       version: {
         title: 'Singapore Package for Vikas Singh',
@@ -8189,15 +8348,17 @@ describe('Phase 8 quotation pages', () => {
     const single = encodeURIComponent('QT-34 - Singapore Package for Vikas Singh');
     const duplicate = encodeURIComponent('for Vikas Singh for Vikas Singh');
 
+    // WhatsApp uses the creator contact and never duplicates the lead name.
     const whatsappHref = screen.getByRole('link', { name: /WhatsApp/ }).getAttribute('href') ?? '';
+    expect(whatsappHref.startsWith('https://wa.me/919111122222?text=')).toBe(true);
     expect(whatsappHref).toContain(single);
     expect(whatsappHref).not.toContain(duplicate);
 
-    const emailHref = screen.getByRole('link', { name: /Email/ }).getAttribute('href') ?? '';
-    expect(emailHref).toContain(
-      encodeURIComponent('Quotation Inquiry (ID: QT-34 - Singapore Package for Vikas Singh)'),
-    );
-    expect(emailHref).not.toContain(duplicate);
+    // Contact Us email row follows the creator, not the company record.
+    const contactSection = screen.getByRole('heading', { name: 'Contact Us' }).closest('section');
+    expect(
+      within(contactSection as HTMLElement).getByRole('link', { name: 'sales.a@alpha.test' }),
+    ).toHaveAttribute('href', 'mailto:sales.a@alpha.test');
   });
 
   it('keeps the contact card balanced when optional contact data is missing', async () => {
@@ -8269,8 +8430,8 @@ describe('Phase 8 quotation pages', () => {
     const publicData = {
       company: {
         name: 'Alpha Travel',
-        email: 'vikassahni4453@gmail.com',
-        phone: '7460939319',
+        email: 'owner@alpha.test',
+        phone: '+91 90000 00000',
         website: null,
         address: null,
         primaryColor: '#2563eb',
@@ -8288,6 +8449,11 @@ describe('Phase 8 quotation pages', () => {
         rooms: 1,
         validUntil: null,
         status: 'VIEWED',
+        createdBy: {
+          fullName: 'Vikas Sahni',
+          phone: '7460939319',
+          email: 'vikassahni4453@gmail.com',
+        },
       },
       version: {
         title: 'Goa proposal',
@@ -8342,7 +8508,7 @@ describe('Phase 8 quotation pages', () => {
       company: {
         name: 'Alpha Travel',
         email: null,
-        phone: '7460939319',
+        phone: null,
         website: null,
         address: null,
         primaryColor: '#2563eb',
@@ -8360,6 +8526,7 @@ describe('Phase 8 quotation pages', () => {
         rooms: 1,
         validUntil: null,
         status: 'VIEWED',
+        createdBy: { fullName: 'Vikas Sahni', phone: '7460939319', email: null },
       },
       version: {
         title: 'Goa proposal',
@@ -8419,6 +8586,7 @@ describe('Phase 8 quotation pages', () => {
         rooms: 1,
         validUntil: null,
         status: 'VIEWED',
+        createdBy: { fullName: 'Vikas Sahni', phone: null, email: null },
       },
       version: {
         title: 'Goa proposal',
