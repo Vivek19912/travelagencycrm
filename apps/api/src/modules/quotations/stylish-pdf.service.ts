@@ -1173,10 +1173,10 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
     }
     doc.restore();
   }
-  // Navy consultant footer (Page 1 only). Compact editorial contact strip with
-  // a very subtle irregular paper transition, compact gold discs holding drawn
-  // navy vector glyphs and short centered separators. All values stay dynamic
-  // and single-line.
+  // Navy consultant footer (Page 1 only). Two balanced contact columns
+  // (consultant + phone) with a very subtle irregular paper transition,
+  // compact gold discs holding drawn navy vector glyphs and a short centered
+  // separator. All values stay dynamic and single-line.
   const page1FooterIconPad = 24;
   const page1DiscR = 13;
   const page1DiscY = PAGE1_FOOTER_TOP + PAGE1_FOOTER_H / 2;
@@ -1197,7 +1197,7 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
     .closePath()
     .fill()
     .restore();
-  // Drawn vector glyphs (navy on gold) — person, telephone handset, envelope.
+  // Drawn vector glyphs (navy on gold) — person and a solid telephone handset.
   const page1Person = (cx: number, cy: number, radius: number) => {
     doc.save().fillColor(NAVY_DARK);
     doc.circle(cx, cy - radius * 0.26, radius * 0.3).fill();
@@ -1224,40 +1224,29 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
     doc.restore();
   };
   const page1Handset = (cx: number, cy: number, radius: number) => {
-    doc.save().strokeColor(NAVY_DARK).lineWidth(radius * 0.22).lineCap('round');
+    // Clean solid handset silhouette: a thick round-capped diagonal bar with
+    // solid earpiece/mouthpiece pads fused at both ends. Chunky filled shapes
+    // keep it recognizable at small sizes, matching the solid person glyph.
+    const x1 = cx - radius * 0.38;
+    const y1 = cy - radius * 0.4;
+    const x2 = cx + radius * 0.36;
+    const y2 = cy + radius * 0.44;
+    doc.save().strokeColor(NAVY_DARK).lineWidth(radius * 0.42).lineCap('round');
     doc
-      .moveTo(cx - radius * 0.38, cy - radius * 0.4)
-      .quadraticCurveTo(
-        cx - radius * 0.45,
-        cy + radius * 0.35,
-        cx + radius * 0.36,
-        cy + radius * 0.44,
-      )
+      .moveTo(x1, y1)
+      .quadraticCurveTo(cx - radius * 0.45, cy + radius * 0.35, x2, y2)
       .stroke();
     doc.restore();
     doc.save().fillColor(NAVY_DARK);
-    doc.circle(cx - radius * 0.38, cy - radius * 0.4, radius * 0.15).fill();
-    doc.circle(cx + radius * 0.36, cy + radius * 0.44, radius * 0.15).fill();
-    doc.restore();
-  };
-  const page1Envelope = (cx: number, cy: number, radius: number) => {
-    const ew = radius * 0.84;
-    const eh = radius * 0.58;
-    doc.save().strokeColor(NAVY_DARK).lineWidth(radius * 0.12).lineJoin('round');
-    doc.rect(cx - ew / 2, cy - eh / 2, ew, eh).stroke();
-    doc
-      .moveTo(cx - ew / 2, cy - eh / 2)
-      .lineTo(cx, cy + radius * 0.1)
-      .lineTo(cx + ew / 2, cy - eh / 2)
-      .stroke();
+    doc.circle(x1, y1, radius * 0.26).fill();
+    doc.circle(x2, y2, radius * 0.26).fill();
     doc.restore();
   };
   const page1FooterCols = [
     { label: 'Consultant:', value: consultant?.name ?? company?.name ?? '-', draw: page1Person },
     { label: 'Phone:', value: consultant?.phone ?? company?.phone ?? '-', draw: page1Handset },
-    { label: 'Email:', value: consultant?.email ?? company?.email ?? '-', draw: page1Envelope },
   ];
-  const page1ColW = CONTENT_W / 3;
+  const page1ColW = CONTENT_W / 2;
   page1FooterCols.forEach((column, index) => {
     const left = M + index * page1ColW;
     if (index > 0) {
@@ -1283,65 +1272,6 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
         width: textW,
         lineBreak: false,
       });
-    if (index === 2) {
-      // Email column: never truncate with ellipsis. Character-level wrapping
-      // (emails have no spaces for PDFKit to break on), shrinking the font as
-      // needed so the complete address stays inside its own column without
-      // clipping or touching the phone column. The text height is measured so
-      // PDFKit never clips a wrapped second line against a fixed box.
-      let page1EmailSize = 10;
-      doc.font('Bold').fontSize(page1EmailSize);
-      let page1EmailLines: string[] = [column.value];
-      let page1EmailHeight = doc.heightOfString(column.value, { width: textW });
-      for (let size = 10; size >= 5.5; size -= 0.5) {
-        doc.font('Bold').fontSize(size);
-        // Prefer breaking after @ . _ - + so wrapped lines stay readable;
-        // an over-long run still splits character-by-character.
-        const tokens =
-          column.value.match(/[^@._\-+]+[@._\-+]?|[@._\-+]/g) ?? column.value.split('');
-        const wrapped: string[] = [''];
-        for (const token of tokens) {
-          let rest = token;
-          while (rest.length > 0) {
-            const current = wrapped[wrapped.length - 1] ?? '';
-            if (current.length === 0) {
-              let piece = '';
-              for (const ch of rest) {
-                if (doc.widthOfString(piece + ch) <= textW) piece += ch;
-                else break;
-              }
-              if (piece.length === 0) piece = rest[0] ?? '';
-              wrapped[wrapped.length - 1] = piece;
-              rest = rest.slice(piece.length);
-              if (rest.length > 0) wrapped.push('');
-            } else if (doc.widthOfString(current + rest) <= textW) {
-              wrapped[wrapped.length - 1] = current + rest;
-              rest = '';
-            } else {
-              wrapped.push('');
-            }
-          }
-        }
-        page1EmailLines = wrapped;
-        page1EmailSize = size;
-        page1EmailHeight = doc.heightOfString(wrapped.join('\n'), { width: textW });
-        // Two lines is the target; keep shrinking while the address needs more
-        // room or would spill past the footer bottom. The smallest size keeps
-        // every character rather than truncating.
-        if (wrapped.length <= 2 && page1EmailHeight <= 32) break;
-      }
-      doc
-        .font('Bold')
-        .fontSize(page1EmailSize)
-        .fillColor('#ffffff')
-        .text(page1EmailLines.join('\n'), textX, PAGE1_FOOTER_TOP + 33, {
-          width: textW,
-          height: Math.max(page1EmailHeight + 1, 12),
-          ellipsis: false,
-          lineBreak: true,
-        });
-      return;
-    }
     let page1ValueSize = 10;
     doc.font('Bold').fontSize(page1ValueSize);
     while (page1ValueSize > 8 && doc.widthOfString(column.value) > textW) {
