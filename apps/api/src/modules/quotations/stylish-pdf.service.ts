@@ -26,6 +26,7 @@ import {
   splitPdfEmojiSequences,
 } from '../../services/pdf/color-emojis.js';
 import { DEJAVU_SANS, DEJAVU_SANS_BOLD } from '../../services/pdf/fonts.js';
+import { ROBOTO_SLAB_BOLD } from '../../services/pdf/roboto-slab.js';
 import {
   computePageHeight,
   htmlToLines,
@@ -347,6 +348,102 @@ const prepareStylishOverviewIcon = async (value: Buffer | null): Promise<Buffer 
   }
 };
 
+/**
+ * Destination-neutral Page 1 hero: a sophisticated blue sky with soft clouds,
+ * generated once per process and reused. It suits every quotation (Goa,
+ * Kerala, Lucknow, Spiti Valley, …) — no destination-specific mountains,
+ * beaches, monuments or city landmarks. An explicit per-quotation CUSTOM hero
+ * override still takes precedence; this is only the universal default.
+ */
+let page1SkyCache: Buffer | null = null;
+const page1SkyBackground = async (): Promise<Buffer | null> => {
+  if (page1SkyCache) return page1SkyCache;
+  try {
+    const width = 1190;
+    const height = 1116;
+    const stops: Array<{ at: number; rgb: [number, number, number] }> = [
+      { at: 0, rgb: [24, 52, 99] },
+      { at: 0.45, rgb: [58, 118, 188] },
+      { at: 0.75, rgb: [133, 174, 216] },
+      { at: 1, rgb: [208, 226, 240] },
+    ];
+    const raw = Buffer.alloc(width * height * 3);
+    for (let row = 0; row < height; row += 1) {
+      const t = row / (height - 1);
+      let lower = stops[0]!;
+      let upper = stops[stops.length - 1]!;
+      for (let s = 0; s < stops.length - 1; s += 1) {
+        if (t >= stops[s]!.at && t <= stops[s + 1]!.at) {
+          lower = stops[s]!;
+          upper = stops[s + 1]!;
+          break;
+        }
+      }
+      const span = Math.max(1e-6, upper.at - lower.at);
+      const k = Math.min(1, Math.max(0, (t - lower.at) / span));
+      const r = Math.round(lower.rgb[0] + (upper.rgb[0] - lower.rgb[0]) * k);
+      const g = Math.round(lower.rgb[1] + (upper.rgb[1] - lower.rgb[1]) * k);
+      const b = Math.round(lower.rgb[2] + (upper.rgb[2] - lower.rgb[2]) * k);
+      for (let col = 0; col < width; col += 1) {
+        const offset = (row * width + col) * 3;
+        raw[offset] = r;
+        raw[offset + 1] = g;
+        raw[offset + 2] = b;
+      }
+    }
+    const clouds = [
+      { w: 430, h: 120, left: 80, top: 150, opacity: 0.16 },
+      { w: 560, h: 150, left: 560, top: 90, opacity: 0.13 },
+      { w: 380, h: 110, left: 800, top: 330, opacity: 0.15 },
+      { w: 480, h: 130, left: 220, top: 430, opacity: 0.12 },
+      { w: 340, h: 100, left: 700, top: 570, opacity: 0.1 },
+    ];
+    const overlays: Array<{ input: Buffer; left: number; top: number }> = [];
+    for (const cloud of clouds) {
+      const mask = Buffer.alloc(cloud.w * cloud.h * 4);
+      for (let cy = 0; cy < cloud.h; cy += 1) {
+        for (let cx = 0; cx < cloud.w; cx += 1) {
+          const dx = (cx / cloud.w - 0.5) * 2;
+          const dy = (cy / cloud.h - 0.5) * 2;
+          const o = (cy * cloud.w + cx) * 4;
+          mask[o] = 255;
+          mask[o + 1] = 255;
+          mask[o + 2] = 255;
+          mask[o + 3] = dx * dx + dy * dy <= 1 ? 255 : 0;
+        }
+      }
+      const blob = await sharp(mask, { raw: { width: cloud.w, height: cloud.h, channels: 4 } })
+        .blur(22)
+        .png()
+        .toBuffer();
+      // Opacity is baked by attenuating the blurred blob's alpha channel.
+      const faded = await sharp(blob)
+        .ensureAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      const pixels = faded.data;
+      for (let p = 3; p < pixels.length; p += 4)
+        pixels[p] = Math.round((pixels[p] ?? 0) * cloud.opacity);
+      overlays.push({
+        input: await sharp(pixels, {
+          raw: { width: faded.info.width, height: faded.info.height, channels: 4 },
+        })
+          .png()
+          .toBuffer(),
+        left: cloud.left,
+        top: cloud.top,
+      });
+    }
+    page1SkyCache = await sharp(raw, { raw: { width, height, channels: 3 } })
+      .composite(overlays)
+      .png()
+      .toBuffer();
+    return page1SkyCache;
+  } catch {
+    return null;
+  }
+};
+
 const clean = (value: unknown): string => String(value ?? '').trim();
 
 const asNumber = (value: unknown): number => {
@@ -437,6 +534,7 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
   });
   doc.registerFont('Body', DEJAVU_SANS);
   doc.registerFont('Bold', DEJAVU_SANS_BOLD);
+  doc.registerFont('RobotoSlabBold', ROBOTO_SLAB_BOLD);
 
   const chunks: Buffer[] = [];
   doc.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -869,9 +967,12 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
 
   realAddPage({ size: [W, H], margin: 0 });
 
-  // Hero photograph: full-bleed, cinematic, object-cover. It extends below the
-  // paper edge so the torn cream contour always overlaps real photography.
-  const page1Hero = input.images?.page1Hero ?? input.images?.cover;
+  // Hero: a destination-neutral blue sky (no destination-specific mountains,
+  // beaches, monuments or landmarks). An explicit per-quotation CUSTOM hero
+  // override still takes precedence; otherwise every quotation shares the
+  // same universal sky. It extends below the paper edge so the torn cream
+  // contour always overlaps real background.
+  const page1Hero = input.images?.page1Hero ?? (await page1SkyBackground());
   const page1HeroBottom = PAGE1_HERO_H + 28;
   if (!drawImage(page1Hero, 0, 0, W, page1HeroBottom, 'cover', 0))
     doc.rect(0, 0, W, page1HeroBottom).fill(NAVY_DARK);
@@ -895,39 +996,20 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
         lineBreak: false,
       });
   }
-  // Cover hero typography: the customer name is the hero. The destination /
-  // package name sits directly below it (dynamic quotation data, never
-  // hardcoded). The legacy "PACKAGE FOR" label, gold rule and tagline were
-  // removed — no gap, no replacement ornament.
-  // Dominant editorial serif lead name, shrinking gracefully for long names.
+  // Cover hero typography: the customer name and the destination / package name
+  // form one elegant group in Roboto Slab Bold (700) — identical family,
+  // weight, size, colour and alignment, so both headings carry equal visual
+  // importance. A single shared size scales both together: when either text
+  // is too long, both shrink jointly (never one alone). No separator sits
+  // between the two headings — only clean, balanced vertical spacing.
+  // Dominant editorial slab-serif headings, shrinking gracefully for long names.
   const page1Name = clean(input.quotation.customerName) || 'Valued Traveller';
   const page1NameWidth = CONTENT_W - 24;
-  const page1NameSize = fitDisplaySize(
-    (text, size) => {
-      doc.font('Times-Bold').fontSize(size);
-      return doc.widthOfString(text);
-    },
-    page1Name,
-    page1NameWidth,
-    60,
-    34,
-  );
   const page1NameTop = 192;
-  doc.font('Times-Bold').fontSize(page1NameSize);
-  const page1NameHeight = doc.heightOfString(page1Name, { width: page1NameWidth });
-  doc
-    .fontSize(page1NameSize)
-    .fillColor('#ffffff')
-    .text(page1Name, M + 12, page1NameTop, {
-      width: page1NameWidth,
-      align: 'center',
-    });
-  // Dynamic destination / package name directly below the customer name.
+  // Dynamic destination / package name value directly below the customer name.
   // Prefers the saved package heading, then the version title (with a
   // trailing " for <customer>" stripped to avoid duplicating the lead name),
-  // then the quotation destinations / summary. Elegant serif italic that
-  // complements the hero; wraps to two lines and shrinks for long values so
-  // nothing clips or overlaps the cream paper below.
+  // then the quotation destinations / summary.
   const page1VersionExtra = input.version as unknown as {
     packageHeading?: unknown;
     title?: unknown;
@@ -958,38 +1040,43 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
   } else {
     page1PackageName = page1RawDestinations || page1RawDestSummary;
   }
-  if (page1PackageName) {
-    const page1PackageWidth = CONTENT_W - 80;
-    let page1PackageSize = fitDisplaySize(
-      (text, size) => {
-        doc.font('Times-Italic').fontSize(size);
-        return doc.widthOfString(text);
-      },
-      page1PackageName,
-      page1PackageWidth,
-      24,
-      14,
-    );
-    doc.font('Times-Italic').fontSize(page1PackageSize);
-    let page1PackageHeight = doc.heightOfString(page1PackageName, {
-      width: page1PackageWidth,
+  // Joint size for both headings: the largest size (down to the minimum) at
+  // which each heading wraps to at most two lines. Both headings always
+  // render at exactly this same size, in the same family/weight/colour.
+  const page1HeadSize = (() => {
+    const start = 46;
+    const min = 20;
+    const linesAt = (text: string, size: number): number => {
+      doc.font('RobotoSlabBold').fontSize(size);
+      const one = Math.max(1, doc.heightOfString('Ag', { width: page1NameWidth }));
+      return Math.max(1, Math.round(doc.heightOfString(text, { width: page1NameWidth }) / one));
+    };
+    let size = start;
+    while (
+      size > min &&
+      (linesAt(page1Name, size) > 2 ||
+        (page1PackageName ? linesAt(page1PackageName, size) > 2 : false))
+    )
+      size -= 1;
+    return size;
+  })();
+  doc.font('RobotoSlabBold').fontSize(page1HeadSize);
+  const page1NameHeight = doc.heightOfString(page1Name, { width: page1NameWidth });
+  doc
+    .fillColor('#ffffff')
+    .text(page1Name, M + 12, page1NameTop, {
+      width: page1NameWidth,
+      align: 'center',
     });
-    while (page1PackageSize > 12 && page1PackageHeight > page1PackageSize * 2.6) {
-      page1PackageSize -= 1;
-      doc.font('Times-Italic').fontSize(page1PackageSize);
-      page1PackageHeight = doc.heightOfString(page1PackageName, {
-        width: page1PackageWidth,
-      });
-    }
-    const page1PackageTop = page1NameTop + page1NameHeight + 12;
+  if (page1PackageName) {
+    const page1PackageTop = page1NameTop + page1NameHeight + 14;
     doc
-      .font('Times-Italic')
-      .fontSize(page1PackageSize)
+      .font('RobotoSlabBold')
+      .fontSize(page1HeadSize)
       .fillColor('#ffffff')
-      .text(page1PackageName, M + 40, page1PackageTop, {
-        width: page1PackageWidth,
+      .text(page1PackageName, M + 12, page1PackageTop, {
+        width: page1NameWidth,
         align: 'center',
-        characterSpacing: 1.2,
       });
   }
 
