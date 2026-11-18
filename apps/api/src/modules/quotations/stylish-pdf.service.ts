@@ -895,16 +895,10 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
         lineBreak: false,
       });
   }
-  doc
-    .font('Bold')
-    .fontSize(12)
-    .fillColor('#ffffff')
-    .text('PACKAGE FOR', M, 188, {
-      width: CONTENT_W,
-      align: 'center',
-      characterSpacing: 4.5,
-      lineBreak: false,
-    });
+  // Cover hero typography: the customer name is the hero. The destination /
+  // package name sits directly below it (dynamic quotation data, never
+  // hardcoded). The legacy "PACKAGE FOR" label, gold rule and tagline were
+  // removed — no gap, no replacement ornament.
   // Dominant editorial serif lead name, shrinking gracefully for long names.
   const page1Name = clean(input.quotation.customerName) || 'Valued Traveller';
   const page1NameWidth = CONTENT_W - 24;
@@ -918,7 +912,7 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
     60,
     34,
   );
-  const page1NameTop = 210;
+  const page1NameTop = 192;
   doc.font('Times-Bold').fontSize(page1NameSize);
   const page1NameHeight = doc.heightOfString(page1Name, { width: page1NameWidth });
   doc
@@ -928,25 +922,76 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
       width: page1NameWidth,
       align: 'center',
     });
-  const page1RuleTop = page1NameTop + page1NameHeight + 10;
-  doc
-    .save()
-    .moveTo(W / 2 - 60, page1RuleTop)
-    .lineTo(W / 2 + 60, page1RuleTop)
-    .lineWidth(1.2)
-    .strokeColor(PAGE1_GOLD)
-    .stroke()
-    .restore();
-  doc
-    .font('Body')
-    .fontSize(9.5)
-    .fillColor('#ffffff')
-    .text('A JOURNEY TO EXTRAORDINARY', M, page1RuleTop + 11, {
-      width: CONTENT_W,
-      align: 'center',
-      characterSpacing: 3.5,
-      lineBreak: false,
+  // Dynamic destination / package name directly below the customer name.
+  // Prefers the saved package heading, then the version title (with a
+  // trailing " for <customer>" stripped to avoid duplicating the lead name),
+  // then the quotation destinations / summary. Elegant serif italic that
+  // complements the hero; wraps to two lines and shrinks for long values so
+  // nothing clips or overlaps the cream paper below.
+  const page1VersionExtra = input.version as unknown as {
+    packageHeading?: unknown;
+    title?: unknown;
+    destinationSummary?: unknown;
+  };
+  const page1RawHeading = clean(page1VersionExtra.packageHeading);
+  const page1RawTitle = clean(page1VersionExtra.title);
+  const page1RawDestinations = clean(
+    (input.quotation as { destinations?: unknown }).destinations,
+  );
+  const page1RawDestSummary =
+    clean(input.quotation.destinationSummary) || clean(page1VersionExtra.destinationSummary);
+  let page1PackageName = '';
+  const page1GenericHeading = `custom package for ${page1Name}`.toLowerCase();
+  if (page1RawHeading && page1RawHeading.toLowerCase() !== page1GenericHeading) {
+    page1PackageName = page1RawHeading;
+  } else if (page1RawTitle) {
+    let page1TitleClean = page1RawTitle;
+    const page1ForSuffix = ` for ${page1Name}`.toLowerCase();
+    if (
+      page1TitleClean.toLowerCase().endsWith(page1ForSuffix) &&
+      page1TitleClean.length > page1ForSuffix.length
+    )
+      page1TitleClean = page1TitleClean.slice(0, page1TitleClean.length - page1ForSuffix.length).trim();
+    if (page1TitleClean && page1TitleClean.toLowerCase() !== page1Name.toLowerCase())
+      page1PackageName = page1TitleClean;
+    else page1PackageName = page1RawDestinations || page1RawDestSummary;
+  } else {
+    page1PackageName = page1RawDestinations || page1RawDestSummary;
+  }
+  if (page1PackageName) {
+    const page1PackageWidth = CONTENT_W - 80;
+    let page1PackageSize = fitDisplaySize(
+      (text, size) => {
+        doc.font('Times-Italic').fontSize(size);
+        return doc.widthOfString(text);
+      },
+      page1PackageName,
+      page1PackageWidth,
+      24,
+      14,
+    );
+    doc.font('Times-Italic').fontSize(page1PackageSize);
+    let page1PackageHeight = doc.heightOfString(page1PackageName, {
+      width: page1PackageWidth,
     });
+    while (page1PackageSize > 12 && page1PackageHeight > page1PackageSize * 2.6) {
+      page1PackageSize -= 1;
+      doc.font('Times-Italic').fontSize(page1PackageSize);
+      page1PackageHeight = doc.heightOfString(page1PackageName, {
+        width: page1PackageWidth,
+      });
+    }
+    const page1PackageTop = page1NameTop + page1NameHeight + 12;
+    doc
+      .font('Times-Italic')
+      .fontSize(page1PackageSize)
+      .fillColor('#ffffff')
+      .text(page1PackageName, M + 40, page1PackageTop, {
+        width: page1PackageWidth,
+        align: 'center',
+        characterSpacing: 1.2,
+      });
+  }
 
   // Organic cream-paper sheet laid over the lower photograph. The contour
   // combines two noise frequencies so the torn edge is asymmetric and clearly
@@ -1217,6 +1262,65 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
         width: textW,
         lineBreak: false,
       });
+    if (index === 2) {
+      // Email column: never truncate with ellipsis. Character-level wrapping
+      // (emails have no spaces for PDFKit to break on), shrinking the font as
+      // needed so the complete address stays inside its own column without
+      // clipping or touching the phone column. The text height is measured so
+      // PDFKit never clips a wrapped second line against a fixed box.
+      let page1EmailSize = 10;
+      doc.font('Bold').fontSize(page1EmailSize);
+      let page1EmailLines: string[] = [column.value];
+      let page1EmailHeight = doc.heightOfString(column.value, { width: textW });
+      for (let size = 10; size >= 5.5; size -= 0.5) {
+        doc.font('Bold').fontSize(size);
+        // Prefer breaking after @ . _ - + so wrapped lines stay readable;
+        // an over-long run still splits character-by-character.
+        const tokens =
+          column.value.match(/[^@._\-+]+[@._\-+]?|[@._\-+]/g) ?? column.value.split('');
+        const wrapped: string[] = [''];
+        for (const token of tokens) {
+          let rest = token;
+          while (rest.length > 0) {
+            const current = wrapped[wrapped.length - 1] ?? '';
+            if (current.length === 0) {
+              let piece = '';
+              for (const ch of rest) {
+                if (doc.widthOfString(piece + ch) <= textW) piece += ch;
+                else break;
+              }
+              if (piece.length === 0) piece = rest[0] ?? '';
+              wrapped[wrapped.length - 1] = piece;
+              rest = rest.slice(piece.length);
+              if (rest.length > 0) wrapped.push('');
+            } else if (doc.widthOfString(current + rest) <= textW) {
+              wrapped[wrapped.length - 1] = current + rest;
+              rest = '';
+            } else {
+              wrapped.push('');
+            }
+          }
+        }
+        page1EmailLines = wrapped;
+        page1EmailSize = size;
+        page1EmailHeight = doc.heightOfString(wrapped.join('\n'), { width: textW });
+        // Two lines is the target; keep shrinking while the address needs more
+        // room or would spill past the footer bottom. The smallest size keeps
+        // every character rather than truncating.
+        if (wrapped.length <= 2 && page1EmailHeight <= 32) break;
+      }
+      doc
+        .font('Bold')
+        .fontSize(page1EmailSize)
+        .fillColor('#ffffff')
+        .text(page1EmailLines.join('\n'), textX, PAGE1_FOOTER_TOP + 33, {
+          width: textW,
+          height: Math.max(page1EmailHeight + 1, 12),
+          ellipsis: false,
+          lineBreak: true,
+        });
+      return;
+    }
     let page1ValueSize = 10;
     doc.font('Bold').fontSize(page1ValueSize);
     while (page1ValueSize > 8 && doc.widthOfString(column.value) > textW) {
