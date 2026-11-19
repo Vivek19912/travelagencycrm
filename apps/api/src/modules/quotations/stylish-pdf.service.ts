@@ -61,7 +61,6 @@ const RED = '#d93045';
 const INK = '#161b22';
 const MUTED = '#687487';
 const LINE = '#d7e0ec';
-const PALE = '#f3f6fa';
 const PALE_BLUE = '#eaf0f8';
 
 // ── Stylish itinerary timeline – centralized constants ──────────
@@ -1692,7 +1691,7 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
             : [];
         flightImages.forEach((item) => {
           const description = item.description?.trim() || '';
-          addContentPage(flightDetails.sectionTitle || 'Flight Itinerary');
+          addContentPage(flightDetails.sectionTitle || 'Flight Details');
           const metaTop = y;
           if (description)
             doc
@@ -1737,7 +1736,7 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
         for (const { label, journey } of journeys) {
           for (const segment of journey.segments ?? []) {
             const top = flightPage === 0 ? 130 : 85;
-            const cardTop = top + 40;
+            const cardTop = top + 30;
             const noteText = htmlToLines(segment.notes).join(' ');
             const baggage = [
               segment.cabinLuggage ? `Cabin: ${segment.cabinLuggage}` : null,
@@ -1750,49 +1749,24 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
             const contentBottom = cardTop + cardHeight;
             const measuredPage = computePageHeight(contentBottom - PDF_TOP_MARGIN);
             addContentPage(
-              flightPage === 0 ? 'Flight Itinerary' : undefined,
+              flightPage === 0 ? 'Flight Details' : undefined,
               measuredPage.pageHeight,
             );
 
-            rounded(M, top, CONTENT_W, 30, PALE, NAVY, 5);
-            // Parent-flight labels grew (`FLIGHT DETAILS 1 · OUTBOUND`), so
-            // the navy tab sizes to its text instead of clipping or wrapping.
-            // Single-flight labels keep the original 88pt tab.
-            doc.font('Bold').fontSize(9);
-            const labelWidth = Math.max(88, Math.ceil(doc.widthOfString(label)) + 16);
-            doc.roundedRect(M, top, labelWidth, 30, 5).fill(NAVY);
-            doc
-              .fillColor('#ffffff')
-              .text(label, M, top + 10, { width: labelWidth, align: 'center', lineBreak: false });
-            const routeText = `${journey.routeFrom || journey.fromCity || segment.from || '-'}  →  ${journey.routeTo || journey.toCity || segment.to || '-'}`;
-            const routeWidth = CONTENT_W - labelWidth - 28;
-            doc.font('Body').fontSize(9);
-            const routeFontSize = Math.max(
-              7,
-              Math.min(9, (9 * routeWidth) / Math.max(1, doc.widthOfString(routeText))),
-            );
-            doc
-              .font('Body')
-              .fontSize(routeFontSize)
-              .fillColor(NAVY)
-              .text(routeText, M + labelWidth + 12, top + 10, {
-                width: routeWidth,
-                height: 11,
-                ellipsis: true,
-                lineBreak: true,
-              });
-
             const sideWidth = 124;
-            // One continuous card: a single rounded outer border replaces the
-            // two abutting panel boxes, so no internal seam is drawn between
-            // the airline and flight-details sections.
-            rounded(M, cardTop, CONTENT_W, cardHeight, '#ffffff', LINE, 10);
+            // Standalone journey label: plain bold navy text aligned to the
+            // left edge of its card. No tab, border or container. The label
+            // already carries the parent-flight prefix for multi-record
+            // quotations (`FLIGHT DETAILS 1 · OUTBOUND`), keeping every
+            // journey distinct without inventing any content.
             doc
-              .moveTo(M + 1, cardTop)
-              .lineTo(M + 1, cardTop + cardHeight)
-              .lineWidth(2)
-              .strokeColor(NAVY)
-              .stroke();
+              .font('Bold')
+              .fontSize(13)
+              .fillColor(NAVY)
+              .text(label, M, top + 2, { width: CONTENT_W, lineBreak: false });
+            // One continuous card: a single rounded outer border in LINE on all
+            // four sides — no internal seam, no accent bar.
+            rounded(M, cardTop, CONTENT_W, cardHeight, '#ffffff', LINE, 10);
             const airlineLogo = segment.airlineId
               ? input.images?.airlines?.[segment.airlineId]
               : null;

@@ -749,7 +749,9 @@ describe('Stylish quotation PDF', () => {
     expect(pdfText(stylish)).toContain('Terminal note: Verify before departure.');
     expect(pdfText(stylish)).not.toContain('<p>');
     expect(pdfText(stylish)).not.toContain('Baggage:');
-    expect(pdfText(stylish)).toContain('→');
+    // The route bar (and its arrow) is gone from the Stylish flight pages;
+    // airport names live in the flight-details card instead.
+    expect(pdfText(stylish)).not.toContain('→');
     const stylishBoxes = pageMediaBoxes(stylish);
     expect(stylishBoxes.some((box) => box.height < PDF_PAGE_HEIGHT - 1)).toBe(true);
     expect(stylishBoxes.every((box) => box.height >= PDF_MIN_PAGE_HEIGHT - 1)).toBe(true);
@@ -764,8 +766,9 @@ describe('Stylish quotation PDF', () => {
       Math.abs(words[tenIndex]!.yBottomFromTop - words[tenIndex + 1]!.yBottomFromTop),
     ).toBeLessThan(1);
     const stylishWords = wordBoxes(stylish);
-    const routeStart = stylishWords.find((word) => word.text === 'Chaudhary');
-    const routeEnd = stylishWords.find((word) => word.text === 'Bengaluru');
+    // The flight-details card keeps departure/arrival on one baseline.
+    const routeStart = stylishWords.find((word) => word.text === 'Rajkot');
+    const routeEnd = stylishWords.find((word) => word.text === 'Singapore');
     expect(routeStart).toBeDefined();
     expect(routeEnd).toBeDefined();
     expect(Math.abs(routeStart!.yBottomFromTop - routeEnd!.yBottomFromTop)).toBeLessThan(1);
