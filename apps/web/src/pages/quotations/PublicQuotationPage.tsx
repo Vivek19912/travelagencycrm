@@ -2118,7 +2118,9 @@ function TravelerPriceBreakdown({
             <div className="min-w-0">
               <p className="break-words text-sm font-semibold text-[#000000]">
                 {kind === 'traveler'
-                  ? TRAVELER_BREAKDOWN_LABELS[row.label] ?? row.label
+                  ? row.id === 'infants' && row.count === 1
+                    ? 'Infant'
+                    : (TRAVELER_BREAKDOWN_LABELS[row.label] ?? row.label)
                   : row.label}
               </p>
               {kind === 'traveler' && (

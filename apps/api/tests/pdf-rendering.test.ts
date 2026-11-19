@@ -1408,7 +1408,12 @@ describe('PDF rendering with long content', () => {
       const pageText = pdfTextPage(stylishAudit, page);
       expect(pageText).toContain('INTERSCALE GLOBAL LUXURY');
       expect(pageText).toContain('CONTACT US');
-      expect(pageText).toContain(`Page ${page} of ${stylishTotal}`);
+      // Repeating footer shows the bare page number only (no "Page"/total).
+      expect(pageText).not.toContain(`Page ${page} of ${stylishTotal}`);
+      expect(pageText).not.toContain(`Page ${page}/${stylishTotal}`);
+      expect(
+        pageText.split('\n').map((line) => line.trim()),
+      ).toContain(`${page}`);
     }
     const stylishAuditBoxes = pageMediaBoxes(stylishAudit);
     expect(stylishAuditBoxes.some((box) => box.height < PDF_PAGE_HEIGHT - 1)).toBe(true);

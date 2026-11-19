@@ -19373,7 +19373,7 @@ describe('Summary & Pricing — package pricing, tax note and secure booking', (
     expect(within(breakdown).getByText('1 × ₹2,000')).toBeInTheDocument();
     expect(within(breakdown).getByText('Child Without Bed (CWOB)')).toBeInTheDocument();
     expect(within(breakdown).getByText('1 × ₹1,000')).toBeInTheDocument();
-    expect(within(breakdown).getByText('Infants')).toBeInTheDocument();
+    expect(within(breakdown).getByText('Infant')).toBeInTheDocument();
     expect(within(breakdown).getByText('1 × ₹7,000')).toBeInTheDocument();
     // Internal profitability is never exposed publicly.
     expect(screen.queryByText(/Margin/)).not.toBeInTheDocument();
@@ -19391,7 +19391,7 @@ describe('Summary & Pricing — package pricing, tax note and secure booking', (
     const breakdown = screen.getByTestId('traveler-price-breakdown');
     expect(within(breakdown).getByText('Adults')).toBeInTheDocument();
     expect(within(breakdown).getByText('1 × ₹10,000')).toBeInTheDocument();
-    expect(within(breakdown).getByText('Infants')).toBeInTheDocument();
+    expect(within(breakdown).getByText('Infant')).toBeInTheDocument();
     expect(within(breakdown).getByText('1 × ₹7,000')).toBeInTheDocument();
     expect(within(breakdown).queryByText('Child With Bed (CWB)')).not.toBeInTheDocument();
     expect(within(breakdown).queryByText('Child Without Bed (CWOB)')).not.toBeInTheDocument();

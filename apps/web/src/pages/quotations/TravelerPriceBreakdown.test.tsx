@@ -170,10 +170,23 @@ describe('Public weblink — By Traveler package price breakdown', () => {
     renderWeblink(payload, 'token-infants');
     await screen.findByText('Custom Package for Aarav Mehta');
     const section = breakdownSection();
-    expect(within(section).getByText('Infants')).toBeInTheDocument();
+    // Exactly one infant uses the singular label.
+    expect(within(section).getByText('Infant')).toBeInTheDocument();
     expect(within(section).getByText('1 × ₹500')).toBeInTheDocument();
     // 3×100 + 2×200 + 1×500 = 1,200 — carried once, by the total line.
     expect(within(section).getAllByText('₹1,200').length).toBe(1);
+  });
+
+  it('uses the plural Infants label for more than one infant', async () => {
+    const payload = publicQuotation({}, { infants: 3, childrenWithoutBed: 0 });
+    renderWeblink(payload, 'token-infants-plural');
+    await screen.findByText('Custom Package for Aarav Mehta');
+    const section = breakdownSection();
+    expect(within(section).getByText('Infants')).toBeInTheDocument();
+    expect(within(section).getByText('3 × ₹500')).toBeInTheDocument();
+    expect(within(section).queryByText('Infant', { exact: true })).not.toBeInTheDocument();
+    // 3×100 + 2×200 + 3×500 = 2,200 — carried once, by the total line.
+    expect(within(section).getAllByText('₹2,200').length).toBe(1);
   });
 
   it('formats every amount in the quotation currency', async () => {
@@ -323,7 +336,7 @@ describe('Public weblink — By Traveler package price breakdown', () => {
       .getAllByRole('listitem')
       .map((li) => li.querySelector('p')?.textContent);
     expect(labels).toEqual([
-      'Infants',
+      'Infant',
       'Child With Bed (CWB)',
       'Adults',
       'Child Without Bed (CWOB)',

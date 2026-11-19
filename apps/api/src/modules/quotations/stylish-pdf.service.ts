@@ -8,6 +8,7 @@ import {
   flightRecordPrefix,
   hotelStayNights,
   isItineraryActivityTitleDuplicate,
+  isPublicTaxNote,
   normalizeFaqs,
   normalizeFlightDetails,
   resolveCruiseRoomLines,
@@ -609,7 +610,7 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
       });
   };
 
-  const pageFooter = (pageIndex: number, pageCount: number) => {
+  const pageFooter = (pageIndex: number) => {
     const pageHeight = doc.page.height;
     const top = pageHeight - (H - 769);
     doc
@@ -631,26 +632,28 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
         .fillColor(NAVY)
         .text('HOLIDAYS', 47, top + 30, { width: 40, align: 'center' });
     }
+    const achievementRows = [
+      company?.tripsSold != null ? `${company.tripsSold} Trip Sold` : null,
+      company?.operatingSinceYear ? `Est: ${company.operatingSinceYear}` : null,
+    ].filter((row): row is string => Boolean(row));
+    // The achievements column (and its heading) exists only when it has
+    // content; Legal then slides left to its pitch so no gap is left behind.
+    const hasAchievements = achievementRows.length > 0;
     const columns = [
       {
         x: 105,
         title: 'CONTACT US',
         rows: [
-          company?.phone ? `Ph: ${company.phone}` : null,
-          company?.email ? `Em: ${company.email}` : null,
-          company?.website ? `Web: ${company.website}` : null,
+          company?.phone ? `${company.phone}` : null,
+          company?.email ? `${company.email}` : null,
+          company?.website ? `${company.website}` : null,
         ],
       },
+      ...(hasAchievements
+        ? [{ x: 254, title: 'OUR ACHIEVEMENTS', rows: achievementRows }]
+        : []),
       {
-        x: 254,
-        title: 'OUR ACHIEVEMENTS',
-        rows: [
-          company?.tripsSold != null ? `${company.tripsSold} Trip Sold` : null,
-          company?.operatingSinceYear ? `Est: ${company.operatingSinceYear}` : null,
-        ],
-      },
-      {
-        x: 404,
+        x: hasAchievements ? 404 : 254,
         title: 'LEGAL INFO',
         rows: [
           company?.tan ? `TAN: ${company.tan}` : null,
@@ -680,7 +683,7 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
       .font('Body')
       .fontSize(6.2)
       .fillColor(MUTED)
-      .text(`Page ${pageIndex + 1} of ${pageCount}`, W - M - 70, pageHeight - (H - 823), {
+      .text(`${pageIndex + 1}`, W - M - 70, pageHeight - (H - 823), {
         width: 70,
         align: 'right',
         lineBreak: false,
@@ -1329,17 +1332,12 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
       86,
       { width: CONTENT_W, align: 'center' },
     );
-  doc.save().lineWidth(1).strokeColor('#7aa7ff');
-  doc.moveTo(2, 107).lineTo(2, 215).stroke();
-  doc.moveTo(2, 107).lineTo(7, 109).stroke();
-  doc.moveTo(2, 215).lineTo(7, 213).stroke();
-  doc.restore();
   doc
     .font('Body')
     .fontSize(10)
     .fillColor(INK)
     .text(
-      `Dear ${input.quotation.customerName},\n\nGreetings from ${company?.name ?? 'our travel team'}.\n\nOur sales team has put up this quotation regarding your upcoming trip. Please go through it and let us know if you need any changes in the provided services. You can reach out to us using the provided contacts.`,
+      `Dear ${input.quotation.customerName},\n\nGreetings from ${company?.name ?? 'our travel team'}.\n\nOur team has put up this quotation regarding your upcoming trip. Please go through it and let us know if you need any changes in the provided services. You can reach out to us using the provided contacts.`,
       25,
       129,
       { width: W - 50, lineGap: 4.2 },
@@ -1360,18 +1358,6 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
     .lineWidth(0.55)
     .strokeColor(LINE)
     .stroke();
-  pill(
-    `#${input.quotation.quotationNumber.replace(/\D/g, '').slice(-5) || input.quotation.quotationNumber}`,
-    W - M - 108,
-    overviewTop + 15,
-    {
-      fill: TEAL,
-      color: '#ffffff',
-      minWidth: 84,
-      height: 24,
-      size: 6,
-    },
-  );
   const overviewRows = [
     [
       overviewIcons.destination,
@@ -1457,28 +1443,23 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
     .font('Body')
     .fontSize(14)
     .fillColor(INK)
-    .text('Investment Summary', M + 31, investmentTop + 21);
-  pill(input.version.currency, W - M - 91, investmentTop + 15, {
-    fill: TEAL,
-    color: '#ffffff',
-    minWidth: 67,
-    height: 23,
-    size: 6,
-  });
-  doc
-    .moveTo(M + 29, investmentTop + 54)
-    .lineTo(W - M - 29, investmentTop + 54)
-    .lineWidth(0.6)
-    .strokeColor(LINE)
-    .stroke();
+    .text('Price Breakdown', M + 31, investmentTop + 21);
   const isSectionWiseInvestment = pricing.pricingMode === 'SECTION_WISE';
   const priceRows = isSectionWiseInvestment
     ? []
     : ([
-        ['Per Adult', input.quotation.adults, input.version.perAdultPrice],
-        ['CWB', input.quotation.childrenWithBed, input.version.perChildWithBedPrice],
-        ['CWOB', input.quotation.childrenWithoutBed, input.version.perChildWithoutBedPrice],
-        ['Infant', input.quotation.infants, input.version.perInfantPrice],
+        ['Adults', input.quotation.adults, input.version.perAdultPrice],
+        ['Child With Bed (CWB)', input.quotation.childrenWithBed, input.version.perChildWithBedPrice],
+        [
+          'Child Without Bed (CWOB)',
+          input.quotation.childrenWithoutBed,
+          input.version.perChildWithoutBedPrice,
+        ],
+        [
+          asNumber(input.quotation.infants) === 1 ? 'Infant' : 'Infants',
+          input.quotation.infants,
+          input.version.perInfantPrice,
+        ],
       ] as const).filter(([, count, value]) => asNumber(count) > 0 && asNumber(value) > 0);
   priceRows.forEach(([label, count, value], index) => {
     const rowTop = investmentTop + 65 + index * 25;
@@ -1504,7 +1485,14 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
   // subtotal with the discount → tax pipeline applied).
   const investmentTotal = pricing.grandTotal;
   const totalBoxX = W - M - 198;
-  rounded(totalBoxX, investmentTop + 50, 176, 121, TEAL, TEAL, 17);
+  // Tax note mirrors the weblink and Classic PDF: only a real saved note
+  // renders. "Do not show" persists as null (and legacy blanks stay blank),
+  // so the card never backfills a default; without a note the card shrinks
+  // to avoid dead space.
+  const investmentTaxNote = isPublicTaxNote(input.version.taxNote)
+    ? input.version.taxNote.trim()
+    : null;
+  rounded(totalBoxX, investmentTop + 50, 176, investmentTaxNote ? 121 : 91, TEAL, TEAL, 17);
   doc
     .font('Body')
     .fontSize(7.2)
@@ -1518,26 +1506,76 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
         align: 'center',
       },
     );
-  doc
-    .font('Body')
-    .fontSize(17)
-    .fillColor('#ffffff')
-    .text(
-      money(investmentTotal, input.version.currency),
-      totalBoxX + 10,
-      investmentTop + 97,
-      { width: 156, align: 'center' },
-    );
-  doc
-    .font('Body')
-    .fontSize(6.5)
-    .fillColor('#b9dbe9')
-    .text(
-      input.version.taxNote || 'Inclusive of all taxes, excluding TCS',
-      totalBoxX + 10,
-      investmentTop + 145,
-      { width: 156, align: 'center' },
-    );
+  // Discount presentation mirrors the interactive weblink exactly: the same
+  // resolver values (originalTotal = grandTotal + discountAmount), shown only
+  // for a real positive discount. No discount → the historic single-price
+  // card, with no badge and no struck-through price.
+  const investmentHasDiscount = pricing.discountAmount > 0;
+  if (!investmentHasDiscount) {
+    doc
+      .font('Body')
+      .fontSize(17)
+      .fillColor('#ffffff')
+      .text(
+        money(investmentTotal, input.version.currency),
+        totalBoxX + 10,
+        investmentTop + 97,
+        { width: 156, align: 'center' },
+      );
+  }
+  if (investmentHasDiscount) {
+    const investmentOriginalStr = money(investmentTotal + pricing.discountAmount, input.version.currency);
+    const investmentBadgeStr = `${money(pricing.discountAmount, input.version.currency)} OFF`;
+    doc.font('Body').fontSize(8.5);
+    const investmentOrigW = doc.widthOfString(investmentOriginalStr);
+    doc.font('Bold').fontSize(7.5);
+    const investmentBadgeW = Math.max(50, doc.widthOfString(investmentBadgeStr) + 18);
+    const investmentDiscountRowW = investmentOrigW + 6 + investmentBadgeW;
+    const investmentDiscountX = totalBoxX + (176 - investmentDiscountRowW) / 2;
+    const investmentDiscountTop = investmentTop + 86;
+    doc
+      .font('Body')
+      .fontSize(8.5)
+      .fillColor('#cfe6f2')
+      .text(investmentOriginalStr, investmentDiscountX, investmentDiscountTop, {
+        lineBreak: false,
+      });
+    doc
+      .save()
+      .moveTo(investmentDiscountX, investmentDiscountTop + 4.5)
+      .lineTo(investmentDiscountX + investmentOrigW, investmentDiscountTop + 4.5)
+      .lineWidth(1)
+      .strokeColor('#cfe6f2')
+      .stroke()
+      .restore();
+    pill(investmentBadgeStr, investmentDiscountX + investmentOrigW + 6, investmentDiscountTop - 3, {
+      fill: '#fde68a',
+      color: '#064e3b',
+      minWidth: investmentBadgeW,
+      height: 15,
+      size: 7.5,
+    });
+    doc
+      .font('Body')
+      .fontSize(19)
+      .fillColor('#ffffff')
+      .text(
+        money(investmentTotal, input.version.currency),
+        totalBoxX + 10,
+        investmentTop + 103,
+        { width: 156, align: 'center' },
+      );
+  }
+  if (investmentTaxNote) {
+    doc
+      .font('Body')
+      .fontSize(6.5)
+      .fillColor('#b9dbe9')
+      .text(investmentTaxNote, totalBoxX + 10, investmentTop + 145, {
+        width: 156,
+        align: 'center',
+      });
+  }
 
   if (asNumber(input.version.initialPaymentAmount) > 0) {
     const bookingTop = 661;
@@ -3298,10 +3336,9 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
     characterSpacing: 0.7,
   });
 
-  const range = doc.bufferedPageRange();
   for (const pageIndex of numberedPages) {
     doc.switchToPage(pageIndex);
-    pageFooter(pageIndex, range.count);
+    pageFooter(pageIndex);
   }
   doc.end();
   return complete;

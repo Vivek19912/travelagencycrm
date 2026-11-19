@@ -1019,9 +1019,10 @@ describe('Live preview in the builder', () => {
     expect(within(body).getByText('Child Without Bed (CWOB)')).toBeInTheDocument();
     expect(within(body).queryByText('Children with bed (CWB)')).not.toBeInTheDocument();
     expect(within(body).queryByText('Children without bed (CWOB)')).not.toBeInTheDocument();
-    // Adults and Infants labels are unchanged.
+    // Adults label stays plural; infant label follows the count (singular here).
     expect(within(body).getByText('Adults')).toBeInTheDocument();
-    expect(within(body).getByText('Infants')).toBeInTheDocument();
+    expect(within(body).getByText('Infant')).toBeInTheDocument();
+    expect(within(body).queryByText('Infants')).not.toBeInTheDocument();
 
     // Editing a per-person rate updates the preview immediately, with no save.
     await userEvent.click(await screen.findByRole('button', { name: 'Pricing' }));
