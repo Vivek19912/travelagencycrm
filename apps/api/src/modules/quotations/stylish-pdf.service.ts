@@ -1783,7 +1783,10 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
               });
 
             const sideWidth = 124;
-            rounded(M, cardTop, sideWidth, cardHeight, '#ffffff', LINE, 5);
+            // One continuous card: a single rounded outer border replaces the
+            // two abutting panel boxes, so no internal seam is drawn between
+            // the airline and flight-details sections.
+            rounded(M, cardTop, CONTENT_W, cardHeight, '#ffffff', LINE, 10);
             doc
               .moveTo(M + 1, cardTop)
               .lineTo(M + 1, cardTop + cardHeight)
@@ -1833,7 +1836,6 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
 
             const mainX = M + sideWidth;
             const mainW = CONTENT_W - sideWidth;
-            rounded(mainX, cardTop, mainW, cardHeight, '#ffffff', LINE, 5);
             const endpointWidth = 128;
             const departureX = mainX + 18;
             const arrivalX = mainX + mainW - endpointWidth - 18;
