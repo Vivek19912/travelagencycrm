@@ -1909,6 +1909,63 @@ export function normalizeStylishPdfPage1(value: unknown): StylishPdfPage1 {
   };
 }
 
+/**
+ * Destination-level Stylish PDF cover selection. Exactly three references to
+ * existing sightseeing-master images, with an explicit display order:
+ * card 1 → first photo card, card 2 → second, card 3 → third. The stored
+ * values are stable identifiers (sightseeing id + gallery image id) — never
+ * signed URLs or copied bytes — so the PDF resolves the current gallery
+ * image at generation time.
+ */
+export const destinationStylishCoverCardSchema = z.object({
+  sightseeingId: z.string().trim().min(1).max(100),
+  imageId: z.string().trim().min(1).max(200),
+});
+
+export const destinationStylishCoverSchema = z
+  .object({
+    cards: z.array(destinationStylishCoverCardSchema).max(3).nullable().optional(),
+  })
+  .nullable()
+  .optional();
+
+export type DestinationStylishCover = z.infer<typeof destinationStylishCoverSchema>;
+
+export interface DestinationStylishCoverCard {
+  sightseeingId: string;
+  imageId: string;
+}
+
+/** Strict input shape for saving: exactly three image references. */
+export const destinationStylishCoverInputSchema = z.object({
+  cards: z.array(destinationStylishCoverCardSchema).length(3),
+});
+
+export type DestinationStylishCoverInput = z.infer<typeof destinationStylishCoverInputSchema>;
+
+/**
+ * Lenient stored-value normalizer: returns the three ordered references, or
+ * null unless exactly three valid, pairwise-distinct entries survive. Callers
+ * that must fail closed (PDF generation) treat null as "no configuration".
+ */
+export function normalizeDestinationStylishCover(value: unknown): DestinationStylishCoverCard[] | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = (value as { cards?: unknown }).cards;
+  if (!Array.isArray(raw) || raw.length !== 3) return null;
+  const cards: DestinationStylishCoverCard[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') return null;
+    const row = entry as Record<string, unknown>;
+    const sightseeingId = typeof row.sightseeingId === 'string' ? row.sightseeingId.trim() : '';
+    const imageId = typeof row.imageId === 'string' ? row.imageId.trim() : '';
+    if (!sightseeingId || !imageId) return null;
+    cards.push({ sightseeingId, imageId });
+  }
+  const keys = new Set(cards.map((card) => `${card.sightseeingId} ${card.imageId}`));
+  if (keys.size !== cards.length) return null;
+  return cards;
+}
+
 export function normalizeDestinationExpertConfig(value: unknown): DestinationExpertConfig {
   if (!value || typeof value !== 'object') return null;
   const row = value as Record<string, unknown>;

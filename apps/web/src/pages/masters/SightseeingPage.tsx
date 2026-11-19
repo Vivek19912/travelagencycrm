@@ -42,6 +42,7 @@ import {
   RichTextPreview,
   StatusBadge,
 } from './MasterUi';
+import { StylishCoverDialog } from './StylishCoverDialog';
 
 const ACTIVE_OPTIONS = 'status=ACTIVE';
 
@@ -93,6 +94,7 @@ export function SightseeingPage() {
   const canDelete = hasPermission(PERMISSIONS.MASTER_SIGHTSEEING_DELETE);
   const [openDestinations, setOpenDestinations] = useState<Set<string>>(new Set());
   const [importOpen, setImportOpen] = useState(false);
+  const [coverDestination, setCoverDestination] = useState<{ id: string; name: string } | null>(null);
 
   const update = (key: string, value: string) => {
     const next = new URLSearchParams(params);
@@ -281,6 +283,17 @@ export function SightseeingPage() {
                         </span>
                       </button>
                       <div className="flex gap-2">
+                        {canUpdate && (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() =>
+                              setCoverDestination({ id: destinationId, name: destination.name })
+                            }
+                          >
+                            Manage Stylish PDF Cover Images
+                          </Button>
+                        )}
                         {canCreate && (
                           <Link to={`/masters/sightseeing/new?destinationId=${destinationId}`}>
                             <Button size="sm" variant="secondary">
@@ -519,6 +532,13 @@ export function SightseeingPage() {
         onClose={() => setImportOpen(false)}
         initialMasterType="SIGHTSEEING"
         onSuccess={() => rows.refetch()}
+      />
+      <StylishCoverDialog
+        key={coverDestination?.id ?? 'closed'}
+        destinationId={coverDestination?.id ?? null}
+        destinationName={coverDestination?.name ?? ''}
+        open={coverDestination !== null}
+        onClose={() => setCoverDestination(null)}
       />
     </div>
   );

@@ -6,10 +6,12 @@ import {
   MASTER_TYPE,
   PERMISSIONS,
   countryNameForCode,
+  normalizeDestinationStylishCover,
   type CityInput,
   type CityUpdateInput,
   type DestinationImageUploadInput,
   type DestinationInput,
+  type DestinationStylishCoverInput,
   type DestinationUpdateInput,
 } from '@interscale/shared';
 import { env } from '../../config/env.js';
@@ -38,6 +40,7 @@ import {
   appendMasterImage,
   collectMasterStorageKeys,
   deleteMasterStorageKeys,
+  effectiveMasterImages,
   findMasterImage,
   masterImageWriteData,
   partitionKeysBySnapshotReferences,
@@ -1073,5 +1076,133 @@ export const destinationsService = {
       });
     });
     return this.details(auth, destinationId);
+  },
+
+  /**
+   * Destination-level Stylish PDF cover selection (tenant-owned config).
+   * Returns the saved three ordered image references with display data for
+   * the management dialog; stale references stay visible but marked invalid
+   * so the admin can replace them. Empty cards array when unconfigured.
+   *
+   * The destination row itself is never modified here, so global (System)
+   * destinations can carry a tenant-specific configuration.
+   */
+  async stylishCover(auth: AuthContext, destinationId: string) {
+    const scope = await resolveMasterScope(auth, MASTER_TYPE.DESTINATION);
+    const destination = await getDestination(auth, destinationId, scope);
+    const saved = await prisma.destinationStylishCover.findUnique({
+      where: { companyId_destinationId: { companyId: auth.companyId, destinationId: destination.id } },
+    });
+    const cards = normalizeDestinationStylishCover(saved ? { cards: saved.cards } : null);
+    if (!cards) return { destination: { id: destination.id, name: destination.name }, cards: [] };
+    const resolved = await Promise.all(
+      cards.map(async (card) => {
+        const row = await prisma.sightseeing.findFirst({
+          where: { id: card.sightseeingId, ...buildVisibleWhere(scope) },
+          select: {
+            id: true,
+            title: true,
+            destinationId: true,
+            city: { select: { name: true } },
+            images: true,
+            imageObjectKey: true,
+            imageFileName: true,
+            imageMimeType: true,
+            imageFileSize: true,
+            imageConfirmedAt: true,
+          },
+        });
+        const gallery = row ? effectiveMasterImages(row) : [];
+        const image = gallery.find((entry) => entry.id === card.imageId) ?? null;
+        const valid = Boolean(
+          row && row.destinationId === destination.id && image,
+        );
+        let url: string | null = null;
+        if (valid && image) {
+          try {
+            url = await storageService.createDownloadUrl(
+              image.objectKey,
+              image.fileName,
+              env.MASTER_MEDIA_PRESIGNED_URL_EXPIRY_SECONDS,
+            );
+          } catch {
+            url = null;
+          }
+        }
+        return {
+          sightseeingId: card.sightseeingId,
+          imageId: card.imageId,
+          valid,
+          title: row?.title ?? null,
+          cityName: row?.city?.name ?? null,
+          isPrimary: image ? gallery[0]?.id === image.id : null,
+          url,
+        };
+      }),
+    );
+    return { destination: { id: destination.id, name: destination.name }, cards: resolved };
+  },
+
+  /**
+   * Replace the tenant's three ordered cover images for a destination.
+   * References only — existing master images are reused in place, never
+   * copied or moved. Every card must point at a visible sightseeing record
+   * of THIS destination with that image still in its gallery.
+   */
+  async saveStylishCover(
+    auth: AuthContext,
+    destinationId: string,
+    input: DestinationStylishCoverInput,
+    context: MastersRequestContext,
+  ) {
+    const scope = await resolveMasterScope(auth, MASTER_TYPE.DESTINATION);
+    const destination = await getDestination(auth, destinationId, scope);
+    const cards = input.cards;
+    if (new Set(cards.map((card) => `${card.sightseeingId}\n${card.imageId}`)).size !== cards.length)
+      throw new ValidationError('Select three different images.');
+    const rows = await prisma.sightseeing.findMany({
+      where: {
+        id: { in: cards.map((card) => card.sightseeingId) },
+        ...buildVisibleWhere(scope),
+      },
+      select: {
+        id: true,
+        destinationId: true,
+        images: true,
+        imageObjectKey: true,
+        imageFileName: true,
+        imageMimeType: true,
+        imageFileSize: true,
+        imageConfirmedAt: true,
+      },
+    });
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    for (const card of cards) {
+      const row = byId.get(card.sightseeingId);
+      if (!row || row.destinationId !== destination.id)
+        throw new ValidationError('Every image must belong to a sightseeing record of this destination.');
+      if (!effectiveMasterImages(row).some((image) => image.id === card.imageId))
+        throw new ValidationError('A selected image is no longer available. Refresh and try again.');
+    }
+    const normalized = normalizeDestinationStylishCover({ cards });
+    if (!normalized) throw new ValidationError('Select exactly three different images.');
+    await prisma.$transaction(async (tx) => {
+      await tx.destinationStylishCover.upsert({
+        where: { companyId_destinationId: { companyId: auth.companyId, destinationId: destination.id } },
+        create: {
+          companyId: auth.companyId,
+          destinationId: destination.id,
+          cards: normalized as unknown as Prisma.InputJsonValue,
+          createdById: auth.userId,
+        },
+        update: { cards: normalized as unknown as Prisma.InputJsonValue, updatedById: auth.userId },
+      });
+      await tx.activityLog.create({
+        data: audit(auth, 'DESTINATION_UPDATED', 'Destination', destination.id, context, {
+          change: 'STYLISH_COVER',
+        }),
+      });
+    });
+    return this.stylishCover(auth, destinationId);
   },
 };

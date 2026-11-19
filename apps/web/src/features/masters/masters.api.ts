@@ -1599,6 +1599,59 @@ export const reorderSightseeingImages = (id: string, imageIds: string[]) =>
   apiClient.patch<Sightseeing>(`/masters/sightseeing/${id}/images/order`, { imageIds });
 
 // ---------------------------------------------------------------------------
+// Destination Stylish PDF cover (Page 1 photo cards)
+// ---------------------------------------------------------------------------
+
+export interface DestinationStylishCoverCard {
+  sightseeingId: string;
+  imageId: string;
+  valid: boolean;
+  title: string | null;
+  cityName: string | null;
+  isPrimary: boolean | null;
+  url: string | null;
+}
+
+export interface DestinationStylishCover {
+  destination: { id: string; name: string };
+  cards: DestinationStylishCoverCard[];
+}
+
+export interface DestinationStylishCoverSelection {
+  sightseeingId: string;
+  imageId: string;
+}
+
+const destinationCoverKeys = {
+  one: (id: string) => ['masters', 'destinations', id, 'stylish-cover'] as const,
+};
+
+export function useDestinationStylishCover(destinationId: string | null) {
+  return useQuery({
+    queryKey: destinationCoverKeys.one(destinationId ?? ''),
+    queryFn: ({ signal }) =>
+      apiClient.get<DestinationStylishCover>(
+        `/masters/destinations/${destinationId}/stylish-cover`,
+        signal,
+      ),
+    enabled: Boolean(destinationId),
+  });
+}
+
+export function useSaveDestinationStylishCover(destinationId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (cards: DestinationStylishCoverSelection[]) =>
+      apiClient.put<DestinationStylishCover>(`/masters/destinations/${destinationId}/stylish-cover`, {
+        cards,
+      }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: destinationCoverKeys.one(destinationId) });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Add-On Services
 // ---------------------------------------------------------------------------
 

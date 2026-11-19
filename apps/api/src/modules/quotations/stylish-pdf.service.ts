@@ -26,7 +26,7 @@ import {
   splitPdfEmojiSequences,
 } from '../../services/pdf/color-emojis.js';
 import { DEJAVU_SANS, DEJAVU_SANS_BOLD } from '../../services/pdf/fonts.js';
-import { ROBOTO_SLAB_BOLD } from '../../services/pdf/roboto-slab.js';
+import { ROBOTO_BOLD } from '../../services/pdf/roboto-bold.js';
 import {
   computePageHeight,
   htmlToLines,
@@ -239,19 +239,24 @@ export type StylishPage1CardImages = {
 } | null | undefined;
 
 /**
- * First usable image from the first three DIFFERENT sightseeing activities,
- * in quotation order. Each activity row counts as different; the same master
- * linked twice is only used once. No cover fallback, no fabrication — fewer
- * than three usable images yields fewer cards.
+ * First usable image from three DIFFERENT sightseeing activities, in day
+ * order with a day offset: itineraries longer than three days start at Day 2
+ * (Day 1 is never used as a card fallback), while three-day and shorter
+ * itineraries start at Day 1. Each activity row counts as different; the same
+ * master linked twice is only used once. Days without a usable image are
+ * skipped in favour of subsequent days. No cover fallback, no fabrication,
+ * no duplication — fewer than three usable images yields fewer cards.
  */
 export function resolveStylishPage1DefaultCards(
   days: Array<{ activities?: StylishPage1CardActivity[] | null } | null> | null | undefined,
   images: StylishPage1CardImages,
 ): Buffer[] {
+  const list = days ?? [];
+  const usable = list.length > 3 ? list.slice(1) : list;
   const out: Buffer[] = [];
   const seen = new Set<string>();
   let position = 0;
-  for (const day of days ?? []) {
+  for (const day of usable) {
     for (const activity of day?.activities ?? []) {
       position += 1;
       if (out.length >= 3 || !activity) break;
@@ -463,7 +468,7 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
   });
   doc.registerFont('Body', DEJAVU_SANS);
   doc.registerFont('Bold', DEJAVU_SANS_BOLD);
-  doc.registerFont('RobotoSlabBold', ROBOTO_SLAB_BOLD);
+  doc.registerFont('RobotoBold', ROBOTO_BOLD);
 
   const chunks: Buffer[] = [];
   doc.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -884,9 +889,11 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
     return value - Math.floor(value);
   };
 
-  // First usable image from the first three DIFFERENT sightseeing activities,
-  // in quotation order. Each activity row counts as different; the same master
-  // linked twice is only used once. No cover fallback, no fabrication.
+  // Default gallery: first usable image from three different sightseeing
+  // activities starting at Day 2 for itineraries longer than three days
+  // (Days 2, 3, 4, then onward), or at Day 1 for three-day and shorter ones.
+  // No cover fallback, no fabrication. A saved destination-level or
+  // per-version cover selection replaces these defaults slot by slot.
   const page1DefaultCards = (): Buffer[] => {
     const details = input.version.sightseeingDetails as {
       days?: SightDay[];
@@ -925,13 +932,11 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
         lineBreak: false,
       });
   }
-  // Cover hero typography: the customer name and the destination / package name
-  // form one elegant group in Roboto Slab Bold (700) — identical family,
-  // weight, size, colour and alignment, so both headings carry equal visual
-  // importance. A single shared size scales both together: when either text
-  // is too long, both shrink jointly (never one alone). No separator sits
-  // between the two headings — only clean, balanced vertical spacing.
-  // Dominant editorial slab-serif headings, shrinking gracefully for long names.
+  // Cover hero typography: the customer name leads in Roboto Bold, with the
+  // destination / package name directly below in the same family and white
+  // colour at 60% of the lead size. No separator sits between the two
+  // headings — only clean, balanced vertical spacing.
+  // Dominant bold sans-serif headings, shrinking gracefully for long names.
   const page1Name = clean(input.quotation.customerName) || 'Valued Traveller';
   const page1NameWidth = CONTENT_W - 24;
   const page1NameTop = 192;
@@ -974,14 +979,15 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
   // "<destination> Package for <customer>" carry when the destination value
   // already ends with that suffix. Never appends anything.
   if (page1PackageName) page1PackageName = collapseTrailingDuplicateWords(page1PackageName);
-  // Joint size for both headings: the largest size (down to the minimum) at
-  // which each heading wraps to at most two lines. Both headings always
-  // render at exactly this same size, in the same family/weight/colour.
-  const page1HeadSize = (() => {
-    const start = 46;
-    const min = 20;
+  // Lead size: the largest size (down to the minimum) at which the name wraps
+  // to at most two lines and the destination at 22/45 of that size wraps to
+  // at most three. The destination always renders at 22/45 of the lead size
+  // so the hierarchy holds at every scale.
+  const page1NameSize = (() => {
+    const start = 45;
+    const min = 24;
     const linesAt = (text: string, size: number): number => {
-      doc.font('RobotoSlabBold').fontSize(size);
+      doc.font('RobotoBold').fontSize(size);
       const one = Math.max(1, doc.heightOfString('Ag', { width: page1NameWidth }));
       return Math.max(1, Math.round(doc.heightOfString(text, { width: page1NameWidth }) / one));
     };
@@ -989,12 +995,13 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
     while (
       size > min &&
       (linesAt(page1Name, size) > 2 ||
-        (page1PackageName ? linesAt(page1PackageName, size) > 2 : false))
+        (page1PackageName ? linesAt(page1PackageName, Math.max(12, Math.round((size * 22) / 45))) > 3 : false))
     )
       size -= 1;
     return size;
   })();
-  doc.font('RobotoSlabBold').fontSize(page1HeadSize);
+  const page1PackageSize = Math.max(12, Math.round((page1NameSize * 22) / 45));
+  doc.font('RobotoBold').fontSize(page1NameSize);
   const page1NameHeight = doc.heightOfString(page1Name, { width: page1NameWidth });
   doc
     .fillColor('#ffffff')
@@ -1005,8 +1012,8 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
   if (page1PackageName) {
     const page1PackageTop = page1NameTop + page1NameHeight + 14;
     doc
-      .font('RobotoSlabBold')
-      .fontSize(page1HeadSize)
+      .font('RobotoBold')
+      .fontSize(page1PackageSize)
       .fillColor('#ffffff')
       .text(page1PackageName, M + 12, page1PackageTop, {
         width: page1NameWidth,
@@ -1094,7 +1101,7 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
     const centerX = page1IconX + page1IconD / 2;
     const centerY = page1IconTop + page1IconD / 2;
     doc.save().circle(centerX, centerY, page1IconD / 2).fill(PAGE1_SERVICE_COLORS[label] ?? NAVY).restore();
-    doc.save().circle(centerX, centerY, 20).fill('#ffffff').restore();
+    doc.save().circle(centerX, centerY, 24).fill('#ffffff').restore();
     const icon = STYLISH_SERVICE_ICONS[label as keyof typeof STYLISH_SERVICE_ICONS] ?? null;
     drawImage(icon, centerX - 14, centerY - 14, 28, 28, 'contain', 0);
     doc
@@ -1173,11 +1180,11 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
     }
     doc.restore();
   }
-  // Navy consultant footer (Page 1 only). Two balanced contact columns
-  // (consultant + phone) with a very subtle irregular paper transition,
-  // compact gold discs holding drawn navy vector glyphs and a short centered
-  // separator. All values stay dynamic and single-line.
-  const page1FooterIconPad = 24;
+  // Navy consultant footer (Page 1 only). Two-sided edge-anchored layout:
+  // consultant pinned to the left edge, phone pinned to the right edge
+  // (20pt insets), with no separator between them. Compact gold discs hold
+  // drawn navy vector glyphs. All values stay dynamic and single-line.
+  const page1FooterEdgePad = 20;
   const page1DiscR = 13;
   const page1DiscY = PAGE1_FOOTER_TOP + PAGE1_FOOTER_H / 2;
   const page1TearNoise = (index: number) => {
@@ -1224,46 +1231,44 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
     doc.restore();
   };
   const page1Handset = (cx: number, cy: number, radius: number) => {
-    // Clean solid handset silhouette: a thick round-capped diagonal bar with
-    // solid earpiece/mouthpiece pads fused at both ends. Chunky filled shapes
-    // keep it recognizable at small sizes, matching the solid person glyph.
-    const x1 = cx - radius * 0.38;
-    const y1 = cy - radius * 0.4;
-    const x2 = cx + radius * 0.36;
-    const y2 = cy + radius * 0.44;
-    doc.save().strokeColor(NAVY_DARK).lineWidth(radius * 0.42).lineCap('round');
-    doc
-      .moveTo(x1, y1)
-      .quadraticCurveTo(cx - radius * 0.45, cy + radius * 0.35, x2, y2)
-      .stroke();
-    doc.restore();
+    // Official Material "call" receiver silhouette (Google, Apache 2.0),
+    // scaled so its 18-unit bbox spans 1.25x the disc radius and centred on
+    // the disc. Single filled path, solid navy, no waves or extra marks.
     doc.save().fillColor(NAVY_DARK);
-    doc.circle(x1, y1, radius * 0.26).fill();
-    doc.circle(x2, y2, radius * 0.26).fill();
+    const k = radius * 0.06944;
+    doc.moveTo((cx + 8.01 * k), (cy + 3.38 * k));
+    doc.bezierCurveTo((cx + 6.78 * k), (cy + 3.38 * k), (cx + 5.59 * k), (cy + 3.18 * k), (cx + 4.48 * k), (cy + 2.82 * k));
+    doc.bezierCurveTo((cx + 4.13 * k), (cy + 2.7 * k), (cx + 3.74 * k), (cy + 2.79 * k), (cx + 3.47 * k), (cy + 3.06 * k));
+    doc.lineTo((cx + 1.9 * k), (cy + 5.03 * k));
+    doc.bezierCurveTo((cx - 0.93 * k), (cy + 3.68 * k), (cx - 3.58 * k), (cy + 1.13 * k), (cx - 4.99 * k), (cy - 1.8 * k));
+    doc.lineTo((cx - 3.04 * k), (cy - 3.46 * k));
+    doc.bezierCurveTo((cx - 2.77 * k), (cy - 3.74 * k), (cx - 2.69 * k), (cy - 4.13 * k), (cx - 2.8 * k), (cy - 4.48 * k));
+    doc.bezierCurveTo((cx - 3.17 * k), (cy - 5.59 * k), (cx - 3.36 * k), (cy - 6.78 * k), (cx - 3.36 * k), (cy - 8.01 * k));
+    doc.bezierCurveTo((cx - 3.36 * k), (cy - 8.55 * k), (cx - 3.81 * k), (cy - 9.0 * k), (cx - 4.35 * k), (cy - 9.0 * k));
+    doc.lineTo((cx - 7.81 * k), (cy - 9.0 * k));
+    doc.bezierCurveTo((cx - 8.35 * k), (cy - 9.0 * k), (cx - 9.0 * k), (cy - 8.76 * k), (cx - 9.0 * k), (cy - 8.01 * k));
+    doc.bezierCurveTo((cx - 9.0 * k), (cy + 1.28 * k), (cx - 1.27 * k), (cy + 9.0 * k), (cx + 8.01 * k), (cy + 9.0 * k));
+    doc.bezierCurveTo((cx + 8.72 * k), (cy + 9.0 * k), (cx + 9.0 * k), (cy + 8.37 * k), (cx + 9.0 * k), (cy + 7.82 * k));
+    doc.lineTo((cx + 9.0 * k), (cy + 4.37 * k));
+    doc.bezierCurveTo((cx + 9.0 * k), (cy + 3.83 * k), (cx + 8.55 * k), (cy + 3.38 * k), (cx + 8.01 * k), (cy + 3.38 * k));
+    doc.closePath().fill();
     doc.restore();
   };
   const page1FooterCols = [
     { label: 'Consultant:', value: consultant?.name ?? company?.name ?? '-', draw: page1Person },
     { label: 'Phone:', value: consultant?.phone ?? company?.phone ?? '-', draw: page1Handset },
   ];
-  const page1ColW = CONTENT_W / 2;
-  page1FooterCols.forEach((column, index) => {
-    const left = M + index * page1ColW;
-    if (index > 0) {
-      doc
-        .save()
-        .moveTo(left, page1DiscY - 14)
-        .lineTo(left, page1DiscY + 14)
-        .lineWidth(0.55)
-        .strokeColor('#4a6584')
-        .stroke()
-        .restore();
-    }
-    const discX = left + page1FooterIconPad;
+  // Each side is capped so long values can never meet in the middle (20pt
+  // minimum gap); overflow shrinks then ellipsizes as before.
+  const page1FooterMaxTextW = (W - page1FooterEdgePad * 2) / 2 - (page1DiscR + 8) - 16;
+  const page1DrawFooterCol = (
+    column: (typeof page1FooterCols)[number],
+    discX: number,
+    textW: number,
+  ) => {
     doc.save().circle(discX, page1DiscY, page1DiscR).fill(PAGE1_GOLD).restore();
     column.draw(discX, page1DiscY, page1DiscR);
     const textX = discX + page1DiscR + 8;
-    const textW = page1ColW - (textX - left) - 6;
     doc
       .font('Body')
       .fontSize(7.5)
@@ -1288,7 +1293,29 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
         ellipsis: true,
         lineBreak: false,
       });
-  });
+  };
+  // Consultant anchored to the far left: gold disc starts exactly at the
+  // 20pt inset.
+  const page1ConsultantDiscX = page1FooterEdgePad + page1DiscR;
+  page1DrawFooterCol(page1FooterCols[0]!, page1ConsultantDiscX, page1FooterMaxTextW);
+  // Phone anchored to the far right: measure the text block first so the
+  // whole section (disc + texts) ends exactly at the 20pt inset.
+  const page1PhoneCol = page1FooterCols[1]!;
+  doc.font('Body').fontSize(7.5);
+  const page1PhoneLabelW = doc.widthOfString(page1PhoneCol.label);
+  let page1PhoneSize = 10;
+  doc.font('Bold').fontSize(page1PhoneSize);
+  while (page1PhoneSize > 8 && doc.widthOfString(page1PhoneCol.value) > page1FooterMaxTextW) {
+    page1PhoneSize -= 0.25;
+    doc.font('Bold').fontSize(page1PhoneSize);
+  }
+  const page1PhoneTextW = Math.min(
+    page1FooterMaxTextW,
+    Math.max(page1PhoneLabelW, doc.widthOfString(page1PhoneCol.value)),
+  );
+  const page1PhoneDiscX =
+    W - page1FooterEdgePad - (page1DiscR + 8 + page1PhoneTextW);
+  page1DrawFooterCol(page1PhoneCol, page1PhoneDiscX, page1PhoneTextW);
 
   // Overview ---------------------------------------------------------------
   addContentPage();

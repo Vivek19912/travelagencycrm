@@ -42,6 +42,7 @@ import {
   cruiseImageUploadSchema,
   cruiseInputSchema,
   cruiseUpdateSchema,
+  destinationStylishCoverInputSchema,
   vehicleImageUploadSchema,
   vehicleInputSchema,
   vehicleUpdateSchema,
@@ -368,6 +369,18 @@ router.patch(
   requirePermission(PERMISSIONS.MASTER_DESTINATIONS_MANAGE_IMAGES),
   validateRequest({ params: destinationId, body: imageReorder }),
   asyncHandler(destinations.imageReorder),
+);
+router.get(
+  '/destinations/:destinationId/stylish-cover',
+  requirePermission(PERMISSIONS.MASTER_SIGHTSEEING_VIEW),
+  validateRequest({ params: destinationId }),
+  asyncHandler(destinations.stylishCover),
+);
+router.put(
+  '/destinations/:destinationId/stylish-cover',
+  requirePermission(PERMISSIONS.MASTER_SIGHTSEEING_UPDATE),
+  validateRequest({ params: destinationId, body: destinationStylishCoverInputSchema }),
+  asyncHandler(destinations.saveStylishCover),
 );
 
 // ---------------------------------------------------------------------------

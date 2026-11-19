@@ -17,6 +17,7 @@ import {
   normalizeFaqs,
   resolveWeblinkSectionOrder,
   normalizeDestinationExpertConfig,
+  normalizeDestinationStylishCover,
   validateQuotationPricing,
   normalizeStylishPdfPage1,
   type StylishPdfPage1,
@@ -75,6 +76,7 @@ import {
 } from '../../services/storage/storage.service.js';
 import { emailService } from '../../services/email/email.service.js';
 import { nextCompanyNumber, quotationAudit, type RequestContext } from './quotation.utils.js';
+import { normalizeCustomerName } from '../../utils/normalize.js';
 import { recalculateCustomerMetrics } from '../customers/customers.service.js';
 import { reminderProcessor } from '../reminders/reminder-processor.service.js';
 import {
@@ -1724,6 +1726,78 @@ async function findDestinationImageRecord(
     return { imageObjectKey: selected.imageObjectKey, imageFileName: selected.imageFileName };
   }
   return null;
+}
+
+/**
+ * Destination-level Stylish PDF cover: the tenant's saved three ordered
+ * sightseeing images for the quotation's PRIMARY destination (first itinerary
+ * country, else first destination-summary part). Resolution is by exact
+ * normalized-name match — never fuzzy — and a configuration is used only
+ * when a single destination resolves and all three images still resolve to
+ * bytes. Anything less falls back to the automatic selection: never a mix,
+ * never a duplicate, never a crash. Exported for focused tests.
+ */
+export async function resolveDestinationCoverCards(
+  tenantCompanyId: string,
+  quotation: {
+    destinationSummary: string;
+    query?: {
+      itinerary?: Array<{ country?: string | null; destination?: string | null }> | null;
+    } | null;
+  },
+  ownerCompanyIds: string[],
+  fetchImage: (key: string | null | undefined) => Promise<Buffer | null>,
+): Promise<Buffer[] | null> {
+  const primary = destinationImageCandidates(
+    quotation.destinationSummary,
+    quotation.query?.itinerary ?? null,
+  )[0];
+  if (!primary) return null;
+  const normalized = normalizeCustomerName(primary);
+  if (!normalized) return null;
+  const matches = await prisma.destination.findMany({
+    where: { companyId: { in: ownerCompanyIds }, normalizedName: normalized },
+    select: { id: true, companyId: true },
+  });
+  const tenantMatches = matches.filter((match) => match.companyId === tenantCompanyId);
+  const selected =
+    tenantMatches.length === 1 ? tenantMatches[0] : matches.length === 1 ? matches[0] : null;
+  if (!selected) return null;
+  const saved = await prisma.destinationStylishCover.findUnique({
+    where: {
+      companyId_destinationId: { companyId: tenantCompanyId, destinationId: selected.id },
+    },
+  });
+  const cards = normalizeDestinationStylishCover(saved ? { cards: saved.cards } : null);
+  if (!cards) return null;
+  const rows = await prisma.sightseeing.findMany({
+    where: {
+      id: { in: cards.map((card) => card.sightseeingId) },
+      companyId: { in: ownerCompanyIds },
+    },
+    select: {
+      id: true,
+      destinationId: true,
+      images: true,
+      imageObjectKey: true,
+      imageFileName: true,
+      imageMimeType: true,
+      imageFileSize: true,
+      imageConfirmedAt: true,
+    },
+  });
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const buffers: Buffer[] = [];
+  for (const card of cards) {
+    const row = byId.get(card.sightseeingId);
+    if (!row || row.destinationId !== selected.id) return null;
+    const image = effectiveMasterImages(row).find((entry) => entry.id === card.imageId);
+    if (!image) return null;
+    const bytes = await fetchImage(image.objectKey);
+    if (!bytes) return null;
+    buffers.push(bytes);
+  }
+  return buffers;
 }
 
 /**
@@ -4112,6 +4186,46 @@ export const quotationsService = {
           }
         }
         if (current.some(Boolean)) images = { ...(images ?? {}), page1Cards: current };
+      }
+      // Destination-level cover: tenant configuration for the quotation's
+      // primary destination. Applies only when neither a per-generation
+      // upload nor a persisted per-version CUSTOM card claimed a slot, and
+      // only when all three configured images resolve — never a mix with
+      // automatic selection. Falls back to automatic selection otherwise.
+      const hasRequestCards = (images?.page1Cards ?? []).some(Boolean);
+      const hasPersistedCards = persistedCards.some(
+        (card) => card?.mode === 'CUSTOM' && card.objectKey,
+      );
+      // A cover-lookup failure must never fail the whole PDF: fall back to the
+      // automatic selection (logged for diagnostics).
+      if (!hasRequestCards && !hasPersistedCards) {
+        try {
+          const ownerCompanyIds = await linkedMasterOwnerCompanyIds(auth.companyId);
+          const fetchDestinationCoverImage = async (
+            key: string | null | undefined,
+          ): Promise<Buffer | null> => {
+            if (!key) return null;
+            try {
+              const body = await storageService.getObject(key);
+              if (!body) return null;
+              return (await webpToPng(body)) ?? body;
+            } catch {
+              return null;
+            }
+          };
+          const destinationCards = await resolveDestinationCoverCards(
+            auth.companyId,
+            quotation,
+            ownerCompanyIds,
+            fetchDestinationCoverImage,
+          );
+          if (destinationCards) images = { ...(images ?? {}), page1Cards: destinationCards };
+        } catch (error) {
+          logger.warn(
+            { err: error, quotationId: quotation.id },
+            'Destination stylish cover unavailable; using automatic Page 1 selection.',
+          );
+        }
       }
     }
 

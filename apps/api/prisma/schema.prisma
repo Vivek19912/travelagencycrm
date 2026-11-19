@@ -1138,6 +1138,7 @@ model Company {
   cities                       City[]
   destinations                 Destination[]
   destinationCities            DestinationCity[]
+  destinationStylishCovers     DestinationStylishCover[]
   vehicleDestinations          VehicleDestination[]
   addOnServiceDestinations     AddOnServiceDestination[]
   hotels                       Hotel[]
@@ -1407,6 +1408,8 @@ model User {
   vendorPaymentsReversed      VendorPayment[]            @relation("VendorPaymentReversedBy")
   citiesCreated               City[]                     @relation("CityCreatedBy")
   destinationsCreated         Destination[]              @relation("DestinationCreatedBy")
+  destinationStylishCoversCreated DestinationStylishCover[] @relation("DestinationStylishCoverCreatedBy")
+  destinationStylishCoversUpdated DestinationStylishCover[] @relation("DestinationStylishCoverUpdatedBy")
   hotelsCreated               Hotel[]                    @relation("HotelCreatedBy")
   airlinesCreated             Airline[]                  @relation("AirlineCreatedBy")
   cruisesCreated              Cruise[]                   @relation("CruiseCreatedBy")
@@ -1675,6 +1678,7 @@ model Destination {
   hotels            Hotel[]
   sightseeings      Sightseeing[]
   visaTypes         VisaType[]
+  stylishCovers     DestinationStylishCover[]
   vehicleLinks      VehicleDestination[]
   addOnServiceLinks AddOnServiceDestination[]
 
@@ -1701,6 +1705,32 @@ model DestinationCity {
   @@unique([destinationId, sequence])
   @@index([companyId, cityId])
   @@map("destination_cities")
+}
+
+/// Tenant-owned Stylish PDF Page 1 cover selection for one destination.
+/// Exactly three sightseeing-master image references (with display order);
+/// the bytes are resolved server-side at PDF time, so no image files are
+/// duplicated. One row per (company, destination); deleting the destination
+/// removes its configuration.
+model DestinationStylishCover {
+  id            String   @id @default(uuid()) @db.Uuid
+  companyId     String   @db.Uuid
+  destinationId String   @db.Uuid
+  /// Ordered [{ sightseeingId, imageId }] — exactly three entries.
+  cards         Json                   @db.Json
+  createdById   String?  @db.Uuid
+  updatedById   String?  @db.Uuid
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  destination Destination @relation(fields: [destinationId], references: [id], onDelete: Cascade)
+  createdBy   User?       @relation("DestinationStylishCoverCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy   User?       @relation("DestinationStylishCoverUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+
+  @@unique([companyId, destinationId])
+  @@index([destinationId])
+  @@map("destination_stylish_covers")
 }
 
 /// A reusable hotel content record. A master entity in its own right — never

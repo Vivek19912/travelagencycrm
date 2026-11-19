@@ -176,6 +176,22 @@ export const destinationsController = {
         context(req),
       ),
     ),
+  stylishCover: async (req: Request, res: Response) =>
+    sendSuccess(
+      res,
+      await destinationsService.stylishCover(auth(req), req.params.destinationId!),
+    ),
+  saveStylishCover: async (req: Request, res: Response) =>
+    sendSuccess(
+      res,
+      await destinationsService.saveStylishCover(
+        auth(req),
+        req.params.destinationId!,
+        req.body,
+        context(req),
+      ),
+      'Stylish PDF cover saved.',
+    ),
 };
 
 export const hotelsController = {
