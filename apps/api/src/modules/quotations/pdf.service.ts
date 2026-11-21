@@ -617,6 +617,13 @@ export interface QuotationPdfInput {
     /** Destination Expert profile photo bytes. */
     expertProfile?: Img;
     /**
+     * Stylish-only Day Wise Itinerary fallback, keyed by lower-cased
+     * destination/city name (e.g. "singapore"). A day without its own image
+     * shows its own destination's saved image instead of the single primary
+     * cover. Only populated for Stylish PDFs; Classic ignores it.
+     */
+    destinationImages?: Record<string, Img>;
+    /**
      * Stylish PDF Page 1 manual overrides. `page1Hero` replaces the
      * destination-master hero for the cover only; `page1Cards` replaces the
      * three sightseeing gallery images slot-by-slot (sparse entries fall back

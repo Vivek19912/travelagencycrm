@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  dayDestinationFallbackKeys,
   destinationImageCandidates,
   fullImageNameCandidates,
   selectDestinationImageRecord,
@@ -186,5 +187,58 @@ describe('selectDestinationImageRecord', () => {
     const second = selectDestinationImageRecord([...rows].reverse(), [], ['da nang bay']);
     expect(first?.imageObjectKey).toBe('key-a');
     expect(second?.imageObjectKey).toBe('key-a');
+  });
+});
+
+describe('dayDestinationFallbackKeys', () => {
+  it('normalises and de-duplicates day cities', () => {
+    expect(dayDestinationFallbackKeys([' Singapore ', 'SINGAPORE', 'Malaysia', null, ''], null)).toEqual({
+      cities: ['singapore', 'malaysia'],
+      cityToCountry: {},
+      soleCountry: null,
+    });
+  });
+
+  it('maps a city to its lead-itinerary row-country (Baga inherits Goa)', () => {
+    expect(
+      dayDestinationFallbackKeys(['Baga', 'Singapore'], [
+        { country: 'Goa', destination: 'Baga' },
+        { country: 'Singapore', destination: 'Singapore' },
+      ]),
+    ).toEqual({
+      cities: ['baga', 'singapore'],
+      cityToCountry: { baga: 'goa', singapore: 'singapore' },
+      soleCountry: null,
+    });
+  });
+
+  it('ignores itinerary rows for cities with no day and empty input', () => {
+    expect(
+      dayDestinationFallbackKeys(['Singapore'], [
+        { country: 'Malaysia', destination: 'Kuala Lumpur' },
+      ]),
+    ).toEqual({ cities: ['singapore'], cityToCountry: {}, soleCountry: 'malaysia' });
+    expect(dayDestinationFallbackKeys([], [])).toEqual({ cities: [], cityToCountry: {}, soleCountry: null });
+  });
+
+  it('returns the lone lead-itinerary country for rows without a destination', () => {
+    // QT-001082 shape: days in "Singapore", one country row with an empty
+    // destination — the single country must still cover the day.
+    expect(
+      dayDestinationFallbackKeys(['Singapore'], [{ country: 'Singapore Heaven Delight', destination: '' }]),
+    ).toEqual({ cities: ['singapore'], cityToCountry: {}, soleCountry: 'singapore heaven delight' });
+  });
+
+  it('returns no sole country when several countries are present', () => {
+    expect(
+      dayDestinationFallbackKeys(['Kuala Lumpur'], [
+        { country: 'Malaysia', destination: 'Kuala Lumpur' },
+        { country: 'Singapore', destination: 'Singapore' },
+      ]),
+    ).toEqual({
+      cities: ['kuala lumpur'],
+      cityToCountry: { 'kuala lumpur': 'malaysia' },
+      soleCountry: null,
+    });
   });
 });

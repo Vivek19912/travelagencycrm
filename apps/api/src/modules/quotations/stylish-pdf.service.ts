@@ -33,7 +33,6 @@ import {
   htmlToLines,
   htmlToRichTextLines,
   PDF_TOP_MARGIN,
-  pdfActivityImageOrCover,
   type PdfRichTextLine,
   type QuotationPdfInput,
   addonPricingBoxes,
@@ -63,15 +62,8 @@ const MUTED = '#687487';
 const LINE = '#d7e0ec';
 const PALE_BLUE = '#eaf0f8';
 
-// ── Stylish itinerary timeline – centralized constants ──────────
-const ITIN_TIMELINE_X = M + 25;
-const ITIN_CIRCLE_OUTER_R = 8;
-const ITIN_CIRCLE_INNER_R = 3;
-const ITIN_BOTTOM_PAD = 12;
-const ITIN_DESC_OFFSET = 43; // distance from card top to description start
+// ── Stylish itinerary – text inset for day descriptions ──────────
 const ITIN_TEXT_LEFT = M + 27;
-const ITIN_TITLE_LEFT = M + 45;
-const ITIN_MIN_CARD_H = 56;
 
 const PAGE_HEADER_ASSET = [
   resolve(process.cwd(), 'apps/api/src/assets/stylish-pdf-page-header.png'),
@@ -496,6 +488,9 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
     pricePerson: await prepareStylishOverviewIcon(STYLISH_OVERVIEW_ICONS.pricePerson),
     payment: await prepareStylishOverviewIcon(STYLISH_OVERVIEW_ICONS.payment),
   };
+  // Airplane artwork for flight-related Additional Price Item rows (same
+  // asset family as the itinerary arc), background-cleared like the row icons.
+  const flightsRowIcon = await prepareStylishOverviewIcon(STYLISH_SERVICE_ICONS.Flights);
   const pricing = resolveQuotationPricing({ version: input.version, quotation: input.quotation });
   const numberedPages: number[] = [];
   let y = 0;
@@ -1320,7 +1315,53 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
   page1DrawFooterCol(page1PhoneCol, page1PhoneDiscX, page1PhoneTextW);
 
   // Overview ---------------------------------------------------------------
-  addContentPage();
+  // Price Breakdown rows are measured before the page exists so a long
+  // custom-item list grows the overview page instead of colliding with the
+  // booking box or footer. A4 whenever everything fits (existing renders
+  // are bit-identical): the footer stays bottom-anchored per physical page.
+  const investmentTop = 446;
+  const isSectionWiseInvestment = pricing.pricingMode === 'SECTION_WISE';
+  const priceRows = isSectionWiseInvestment
+    ? []
+    : ([
+        ['Adults', input.quotation.adults, input.version.perAdultPrice],
+        ['Child With Bed (CWB)', input.quotation.childrenWithBed, input.version.perChildWithBedPrice],
+        [
+          'Child Without Bed (CWOB)',
+          input.quotation.childrenWithoutBed,
+          input.version.perChildWithoutBedPrice,
+        ],
+        [
+          asNumber(input.quotation.infants) === 1 ? 'Infant' : 'Infants',
+          input.quotation.infants,
+          input.version.perInfantPrice,
+        ],
+      ] as const).filter(([, count, value]) => asNumber(count) > 0 && asNumber(value) > 0);
+  // Additional Price Items (Pricing tab flat charges, the same saved rows the
+  // public weblink breakdown lists): rendered after the traveler rows in
+  // saved order, never multiplied by traveler count. Amounts already flow
+  // into the package total — this only displays them. Row heights grow for
+  // wrapped labels so nothing clips.
+  const investmentCustomItems = isSectionWiseInvestment ? [] : (pricing.customItems?.rows ?? []);
+  doc.font('Body').fontSize(9);
+  let investmentCustomExtra = 0;
+  const investmentCustomLayout: Array<{ top: number; height: number }> = [];
+  {
+    let top = investmentTop + 65 + priceRows.length * 25;
+    for (const item of investmentCustomItems) {
+      const lines = Math.max(1, Math.ceil(doc.widthOfString(item.label) / 175));
+      const height = 25 + (lines - 1) * 12;
+      investmentCustomLayout.push({ top, height });
+      top += height;
+      investmentCustomExtra += height;
+    }
+  }
+  const overviewHasBooking = asNumber(input.version.initialPaymentAmount) > 0;
+  const overviewContentBottom = Math.max(
+    investmentTop + 194 + investmentCustomExtra,
+    overviewHasBooking ? 661 + investmentCustomExtra + 64 : 0,
+  );
+  addContentPage(undefined, Math.max(H, overviewContentBottom + 82));
   doc
     .font('Times-Italic')
     .fontSize(14)
@@ -1436,30 +1477,12 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
         .text(sub, left + 32, top + 39, { width: 118, height: 16 });
   });
 
-  const investmentTop = 446;
-  rounded(M, investmentTop, CONTENT_W, 194, '#ffffff', TEAL, 10);
+  rounded(M, investmentTop, CONTENT_W, 194 + investmentCustomExtra, '#ffffff', TEAL, 10);
   doc
     .font('Body')
     .fontSize(14)
     .fillColor(INK)
     .text('Price Breakdown', M + 31, investmentTop + 21);
-  const isSectionWiseInvestment = pricing.pricingMode === 'SECTION_WISE';
-  const priceRows = isSectionWiseInvestment
-    ? []
-    : ([
-        ['Adults', input.quotation.adults, input.version.perAdultPrice],
-        ['Child With Bed (CWB)', input.quotation.childrenWithBed, input.version.perChildWithBedPrice],
-        [
-          'Child Without Bed (CWOB)',
-          input.quotation.childrenWithoutBed,
-          input.version.perChildWithoutBedPrice,
-        ],
-        [
-          asNumber(input.quotation.infants) === 1 ? 'Infant' : 'Infants',
-          input.quotation.infants,
-          input.version.perInfantPrice,
-        ],
-      ] as const).filter(([, count, value]) => asNumber(count) > 0 && asNumber(value) > 0);
   priceRows.forEach(([label, count, value], index) => {
     const rowTop = investmentTop + 65 + index * 25;
     drawImage(overviewIcons.pricePerson, M + 29, rowTop - 2, 13, 13, 'contain', 0);
@@ -1480,9 +1503,86 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
       .strokeColor(LINE)
       .stroke();
   });
+  // Additional Price Item icons: flight- or visa-related labels get a matching
+  // pictogram (case-insensitive substring, so plurals match too); everything
+  // else keeps the default person icon. Traveller rows above are untouched.
+  const customItemIconKind = (label: string): 'flight' | 'visa' | null => {
+    const text = label.toLowerCase();
+    if (text.includes('flight')) return 'flight';
+    if (text.includes('visa')) return 'visa';
+    return null;
+  };
+  // Minimal navy passport booklet with gold emblem, drawn at row-icon scale.
+  const drawPassportIcon = (x: number, top: number, size: number) => {
+    const coverW = size * 0.68;
+    const coverX = x + (size - coverW) / 2;
+    const coverH = size * 0.86;
+    const coverTop = top + (size - coverH) / 2;
+    doc.save().roundedRect(coverX, coverTop, coverW, coverH, size * 0.09).fill(NAVY).restore();
+    doc.save().fillColor('#ffffff');
+    doc.rect(coverX + size * 0.14, coverTop + size * 0.24, coverW - size * 0.28, size * 0.07).fill();
+    doc.rect(coverX + size * 0.14, coverTop + size * 0.38, coverW - size * 0.28, size * 0.07).fill();
+    doc.restore();
+    doc
+      .save()
+      .fillColor(GOLD)
+      .circle(coverX + coverW / 2, coverTop + coverH * 0.72, size * 0.1)
+      .fill()
+      .restore();
+  };
+  investmentCustomLayout.forEach(({ top: rowTop, height: rowHeight }, customIndex) => {
+    const item = investmentCustomItems[customIndex]!;
+    const iconKind = customItemIconKind(item.label);
+    if (iconKind === 'flight' && flightsRowIcon) {
+      drawImage(flightsRowIcon, M + 29, rowTop - 2, 13, 13, 'contain', 0);
+    } else if (iconKind === 'visa') {
+      drawPassportIcon(M + 29, rowTop - 2, 13);
+    } else {
+      drawImage(overviewIcons.pricePerson, M + 29, rowTop - 2, 13, 13, 'contain', 0);
+    }
+    doc
+      .font('Body')
+      .fontSize(9)
+      .fillColor(MUTED)
+      .text(item.label, M + 51, rowTop, { width: 175 });
+    doc
+      .font('Body')
+      .fontSize(9.5)
+      .fillColor(INK)
+      .text(money(item.amount, input.version.currency), M + 225, rowTop, {
+        width: 70,
+        align: 'right',
+      });
+    doc
+      .moveTo(M + 29, rowTop + rowHeight - 10)
+      .lineTo(M + 300, rowTop + rowHeight - 10)
+      .lineWidth(0.45)
+      .strokeColor(LINE)
+      .stroke();
+  });
   // Authoritative total from the shared pricing engine (active method's
-  // subtotal with the discount → tax pipeline applied).
-  const investmentTotal = pricing.grandTotal;
+  // subtotal with the discount → tax pipeline applied), minus Add-on
+  // Services. Add-on buckets must never inflate the Stylish Total Package
+  // Price, and the legacy stored-final fallback must not silently reintroduce
+  // them (a stored total can carry add-on charges, as on QT-001083).
+  // Package pricing is strictly traveler + custom-item charges for
+  // PER_PERSON — exactly as the builder computes it live — so a zero core
+  // package stays zero no matter what separately added service rows carry.
+  // A separately added row never counts merely because of its section bucket
+  // (e.g. a VEHICLE_TRANSFER add-on like Dhano); genuine package-included
+  // vehicle pricing keeps flowing through the SECTION_WISE section path.
+  const investmentAddonAmount =
+    pricing.sections.find((section) => section.id === 'addon')?.amount ?? 0;
+  const investmentSubtotal =
+    pricing.pricingMode === 'SECTION_WISE'
+      ? pricing.sectionTotal - investmentAddonAmount
+      : pricing.travelerPricing.subtotal + pricing.customItems.subtotal;
+  const investmentTaxable = Math.max(
+    0,
+    Math.round((investmentSubtotal - pricing.discountAmount) * 100) / 100,
+  );
+  const investmentTax = Math.round(investmentTaxable * pricing.taxRate) / 100;
+  const investmentTotal = Math.round((investmentTaxable + investmentTax) * 100) / 100;
   const totalBoxX = W - M - 198;
   // Tax note mirrors the weblink and Classic PDF: only a real saved note
   // renders. "Do not show" persists as null (and legacy blanks stay blank),
@@ -1576,8 +1676,8 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
       });
   }
 
-  if (asNumber(input.version.initialPaymentAmount) > 0) {
-    const bookingTop = 661;
+  if (overviewHasBooking) {
+    const bookingTop = 661 + investmentCustomExtra;
     rounded(M, bookingTop, CONTENT_W, 64, '#ffffff', GREEN, 10);
     drawImage(overviewIcons.payment, M + 27, bookingTop + 18, 17, 17, 'contain', 0);
     doc
@@ -2201,15 +2301,10 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
         : [{ name: day.title ?? `Day ${day.dayNumber}`, description: '' }];
       for (const activity of activities) {
         const top = activityPage === 0 ? 132 : 85;
-        const descriptionTop = top + 184;
         const richDescription = htmlToRichTextLines(activity.description);
-        const availableHeight = bodyBottom() - descriptionTop - 11;
-        let bodySize = 9;
-        let measured = measureRichHeight(richDescription, CONTENT_W - 54, bodySize, 1.38);
-        if (ITIN_DESC_OFFSET + measured + ITIN_BOTTOM_PAD > availableHeight) {
-          bodySize = 8.2;
-          measured = measureRichHeight(richDescription, CONTENT_W - 54, bodySize, 1.38);
-        }
+        const bodySize = 9;
+        const bodyWidth = CONTENT_W - 54;
+        const bodyFactor = 1.38;
         // DISPLAY-ONLY pricing snapshot — never feeds totals
         const displayPricingRaw = (activity as unknown as { displayPricing?: unknown }).displayPricing as
           | Array<{ label?: string | null; price?: number | string | null; enabled?: boolean }>
@@ -2229,7 +2324,6 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
         const displayPricingHeading =
           String((activity as unknown as { displayPricingHeading?: unknown }).displayPricingHeading ?? '').trim() || 'PRICING';
         let displayPricingLines: PdfRichTextLine[] = [];
-        let displayPricingMeasured = 0;
         if (displayPricingRows.length) {
           const pricingHtml = `<p><strong>${displayPricingHeading}</strong></p><p>${displayPricingRows
             .map(
@@ -2238,31 +2332,40 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
             )
             .join(' · ')}</p>`;
           displayPricingLines = htmlToRichTextLines(pricingHtml);
-          displayPricingMeasured = measureRichHeight(displayPricingLines, CONTENT_W - 54, bodySize, 1.38);
         }
-        // Dynamic card height = title offset + actual content + bottom padding
-        // For "aaa" this is ~67pt; for long rich text it grows naturally; never oversized
-        const bodyHeight = Math.min(
-          availableHeight,
-          Math.max(ITIN_MIN_CARD_H, ITIN_DESC_OFFSET + measured + displayPricingMeasured + ITIN_BOTTOM_PAD),
-        );
         addContentPage(activityPage === 0 ? 'Day Wise Itinerary' : undefined);
-        doc
-          .save()
-          .roundedRect(M + 2, top + 4, CONTENT_W, 166, 12)
-          .fill('#e8edf4')
-          .restore();
-        doc.save().roundedRect(M, top, CONTENT_W, 166, 12).fill('#ffffff').restore();
+        // Day details sit directly on the white page — no enclosing card,
+        // background, border, shadow or rounded container. The destination
+        // image keeps its own rounded corners; the DAY badge, title, date,
+        // time, meals and transfer pill keep their existing design.
+        // Priority 1 — the day's own image (saved snapshot, then master).
         const activityImage =
           (activity.imageDocumentId
             ? input.images?.itineraryDocuments?.[activity.imageDocumentId]
             : null) ??
           (activity.imageUrl ? input.images?.itinerary?.[activity.imageUrl] : null) ??
           (activity.sightseeingId ? input.images?.sightseeing?.[activity.sightseeingId] : null);
-        const imageValue = pdfActivityImageOrCover(activity, activityImage, input.images?.cover);
+        // Priority 2 — the relevant destination's saved image for this day
+        // (multi-destination safe: never another destination's cover). Days
+        // without an attributable city keep the existing cover behaviour.
+        // An explicitly emptied day gallery also falls back to the matching
+        // destination image when one is available.
+        const dayCityKey = (day.city ?? '').trim().toLowerCase();
+        const dayDestinationImage = dayCityKey
+          ? (input.images?.destinationImages?.[dayCityKey] ?? null)
+          : (input.images?.cover ?? null);
+        const imageValue = activityImage ?? dayDestinationImage ?? null;
         if (!drawImage(imageValue, M + 12, top + 12, 165, 142, 'cover', 10)) {
-          doc.roundedRect(M + 12, top + 12, 165, 142, 10).fill('#e3ebf3');
-          drawEmoji('🌍', M + 73, top + 63, 42);
+          // A day image that exists but cannot be decoded falls back to the
+          // destination image before the generic placeholder (Priority 3).
+          const renderFallback =
+            imageValue && dayDestinationImage && imageValue !== dayDestinationImage
+              ? drawImage(dayDestinationImage, M + 12, top + 12, 165, 142, 'cover', 10)
+              : false;
+          if (!renderFallback) {
+            doc.roundedRect(M + 12, top + 12, 165, 142, 10).fill('#e3ebf3');
+            drawEmoji('🌍', M + 73, top + 63, 42);
+          }
         }
         const dayX = M + 195;
         doc.roundedRect(dayX, top + 17, 55, 54, 9).fill(PALE_BLUE);
@@ -2333,52 +2436,54 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
         const transfer = transferLabel(activity.dailyTransfer ?? day.dailyTransfer);
         if (transfer) pill(transfer, dayX, metaTop, { minWidth: 92, height: 20, size: 6.5 });
 
+        // Description sits directly on the white page, immediately below the
+        // day details — no enclosing box, background, border, shadow or
+        // side icon/line. Rich-text structure and styling are untouched;
+        // long copy paginates onto follow-up pages instead of clipping or
+        // overlapping the footer.
+        let yy = top + 184;
         const activityTitle = clean(activity.name);
         const shouldShowActivityTitle =
           !!activityTitle && !isItineraryActivityTitleDuplicate(day.title, activityTitle);
-        doc
-          .save()
-          .roundedRect(M + 2, descriptionTop + 3, CONTENT_W, bodyHeight, 10)
-          .fill('#e8edf4')
-          .restore();
-        doc
-          .save()
-          .roundedRect(M, descriptionTop, CONTENT_W, bodyHeight, 10)
-          .fill('#f7f9fc')
-          .restore();
         if (shouldShowActivityTitle) {
-          doc.circle(ITIN_TIMELINE_X, descriptionTop + 22, ITIN_CIRCLE_OUTER_R).fill(GOLD);
-          doc.circle(ITIN_TIMELINE_X, descriptionTop + 22, ITIN_CIRCLE_INNER_R).fill(NAVY);
+          const titleH = 22;
+          if (yy + titleH + 6 > bodyBottom()) {
+            addContentPage(undefined);
+            yy = y;
+          }
           doc
             .font('Bold')
             .fontSize(11.5)
             .fillColor(NAVY)
-            .text(activityTitle, ITIN_TITLE_LEFT, descriptionTop + 14, {
-              width: CONTENT_W - 66,
-              height: 22,
+            .text(activityTitle, ITIN_TEXT_LEFT, yy, {
+              width: bodyWidth,
+              height: titleH,
               ellipsis: true,
             });
+          yy += titleH + 6;
         }
-        drawRichLines(
-          richDescription,
-          ITIN_TEXT_LEFT,
-          descriptionTop + ITIN_DESC_OFFSET,
-          CONTENT_W - 54,
-          bodySize,
-          INK,
-          1.38,
-        );
+        for (const line of richDescription) {
+          const need = measureRichHeight([line], bodyWidth, bodySize, bodyFactor);
+          if (need <= 0) continue;
+          if (yy + need > bodyBottom()) {
+            addContentPage(undefined);
+            yy = y;
+          }
+          yy = drawRichLines([line], ITIN_TEXT_LEFT, yy, bodyWidth, bodySize, INK, bodyFactor);
+        }
         if (displayPricingLines.length) {
-          drawRichLines(
-            displayPricingLines,
-            ITIN_TEXT_LEFT,
-            descriptionTop + ITIN_DESC_OFFSET + measured + 8,
-            CONTENT_W - 54,
-            bodySize,
-            INK,
-            1.38,
-          );
+          yy += 8;
+          for (const line of displayPricingLines) {
+            const need = measureRichHeight([line], bodyWidth, bodySize, bodyFactor);
+            if (need <= 0) continue;
+            if (yy + need > bodyBottom()) {
+              addContentPage(undefined);
+              yy = y;
+            }
+            yy = drawRichLines([line], ITIN_TEXT_LEFT, yy, bodyWidth, bodySize, INK, bodyFactor);
+          }
         }
+        y = yy + 10;
         activityPage += 1;
       }
     }

@@ -1652,6 +1652,50 @@ export function destinationImageCandidates(
 }
 
 /**
+ * Stylish-only Day Wise Itinerary fallback keys. Returns the distinct
+ * normalized day cities (sightseeing day `city` plus legacy itinerary
+ * `destination`), each wanted city's row-country from the lead itinerary
+ * rows — so a city day inherits its country's Destination-master image when
+ * the city itself has no master (e.g. Baga → Goa) — and `soleCountry`: the
+ * single distinct lead-itinerary country, if there is exactly one. A lone
+ * country covers every day of a single-destination quotation even when the
+ * itinerary rows carry no per-day destination (e.g. days in "Singapore"
+ * with a single "Singapore Heaven Delight" country row). Pure and exported
+ * for focused tests.
+ */
+export function dayDestinationFallbackKeys(
+  dayCities: Array<string | null | undefined>,
+  itinerary: Array<{ country?: string | null; destination?: string | null }> | null | undefined,
+): { cities: string[]; cityToCountry: Record<string, string>; soleCountry: string | null } {
+  const key = (value: string | null | undefined) => (value ?? '').trim().toLowerCase();
+  const cities: string[] = [];
+  const seen = new Set<string>();
+  for (const city of dayCities) {
+    const normalized = key(city);
+    if (normalized && !seen.has(normalized)) {
+      seen.add(normalized);
+      cities.push(normalized);
+    }
+  }
+  const wanted = new Set(cities);
+  const cityToCountry: Record<string, string> = {};
+  const countries: string[] = [];
+  const seenCountries = new Set<string>();
+  for (const row of itinerary ?? []) {
+    const city = key(row.destination);
+    const country = key(row.country);
+    if (country && !seenCountries.has(country)) {
+      seenCountries.add(country);
+      countries.push(country);
+    }
+    if (city && country && wanted.has(city) && !cityToCountry[city]) {
+      cityToCountry[city] = country;
+    }
+  }
+  return { cities, cityToCountry, soleCountry: countries.length === 1 ? (countries[0] ?? null) : null };
+}
+
+/**
  * Pick the hotel snapshot image the PDF should render for a bookmarked hotel:
  * the image marked "Use in PDF" (`pdfImageUrl`), falling back to the first
  * image in the saved order. Returns null when there are no snapshot images.
@@ -4119,6 +4163,84 @@ export const quotationsService = {
           flightImage = flightImages[0]?.image ?? null;
         }
 
+        // Stylish-only: per-day destination fallback images for the Day Wise
+        // Itinerary. A day without its own image shows its own destination's
+        // saved image rather than another destination's cover. Best-effort:
+        // any failure leaves the renderer on its existing cover/placeholder
+        // path. Classic PDFs never receive this field.
+        let destinationImagesForItineraryDays: Record<string, Buffer> | undefined;
+        if (options.style === 'STYLISH') {
+          try {
+            const pdfDays = (pdfSightseeingDetails as { days?: unknown } | null)?.days;
+            const sightseeingCities = Array.isArray(pdfDays)
+              ? (pdfDays as Array<{ city?: unknown }>).map((day) => String(day.city ?? ''))
+              : [];
+            const legacyDestinations = Array.isArray(version.itinerary)
+              ? version.itinerary.map((row) => String(row.destination ?? ''))
+              : [];
+            const leadItinerary = (
+              quotation as unknown as {
+                query?: { itinerary?: Array<{ country?: string | null; destination?: string | null }> | null } | null;
+              }
+            ).query?.itinerary;
+            const { cities, cityToCountry, soleCountry } = dayDestinationFallbackKeys(
+              [...sightseeingCities, ...legacyDestinations],
+              leadItinerary,
+            );
+            const lookupNames = new Set<string>(cities);
+            for (const city of cities) {
+              const country = cityToCountry[city] ?? soleCountry;
+              if (country) lookupNames.add(country);
+            }
+            if (lookupNames.size) {
+              const masters = await prisma.destination.findMany({
+                where: {
+                  companyId: auth.companyId,
+                  imageObjectKey: { not: null },
+                  imageConfirmedAt: { not: null },
+                },
+                select: { name: true, normalizedName: true, imageObjectKey: true },
+              });
+              const objectKeyByName = new Map<string, string>();
+              for (const master of masters) {
+                if (!master.imageObjectKey) continue;
+                for (const label of [master.name, master.normalizedName]) {
+                  const normalized = (label ?? '').trim().toLowerCase();
+                  if (normalized && !objectKeyByName.has(normalized)) {
+                    objectKeyByName.set(normalized, master.imageObjectKey);
+                  }
+                }
+              }
+              const bytesByName = new Map<string, Buffer>();
+              const bytesFor = async (name: string): Promise<Buffer | null> => {
+                const cached = bytesByName.get(name);
+                if (cached) return cached;
+                const objectKey = objectKeyByName.get(name);
+                if (!objectKey) return null;
+                const bytes = await fetchImage(objectKey);
+                if (bytes) bytesByName.set(name, bytes);
+                return bytes;
+              };
+              const entries: Record<string, Buffer> = {};
+              for (const city of cities) {
+                const direct = await bytesFor(city);
+                if (direct) {
+                  entries[city] = direct;
+                  continue;
+                }
+                const country = cityToCountry[city] ?? soleCountry;
+                if (country) {
+                  const inherited = await bytesFor(country);
+                  if (inherited) entries[city] = inherited;
+                }
+              }
+              if (Object.keys(entries).length) destinationImagesForItineraryDays = entries;
+            }
+          } catch {
+            destinationImagesForItineraryDays = undefined;
+          }
+        }
+
         images = {
           cover: coverImage,
           hotels: hotelImages,
@@ -4129,6 +4251,7 @@ export const quotationsService = {
           airlines: airlineImages,
           flight: flightImage,
           flights: flightImages,
+          ...(destinationImagesForItineraryDays ? { destinationImages: destinationImagesForItineraryDays } : {}),
         };
       } catch {
         // Image resolution is best-effort; never block PDF generation.
