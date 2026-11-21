@@ -64,6 +64,11 @@ const PALE_BLUE = '#eaf0f8';
 
 // ── Stylish itinerary – text inset for day descriptions ──────────
 const ITIN_TEXT_LEFT = M + 27;
+// Fixed day-details block: image/meta rows, then breathing room before the
+// description starts. Kept identical to the approved layout.
+const ITIN_DETAILS_H = 184;
+// Natural whitespace between consecutive days sharing one page.
+const ITIN_DAY_GAP = 24;
 
 const PAGE_HEADER_ASSET = [
   resolve(process.cwd(), 'apps/api/src/assets/stylish-pdf-page-header.png'),
@@ -2294,13 +2299,24 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
             mealsText: day.meals,
             activities: [{ name: day.title, description: day.description }],
           }));
-    let activityPage = 0;
+    // Intelligent pagination: consecutive days share a page whenever the
+    // whole next day (details + complete description) fits in the remaining
+    // space. Heights are measured, never shrunk: a day that cannot fit moves
+    // whole to a fresh A4 page (heading never stranded), and a day taller
+    // than a page flows its description across standard A4 pages.
+    let itinFirstDay = true;
+    let yy = 0; // cursor on the current itinerary page
+    let itinPageHasContent = false;
+    const startItinPage = (withTitle: boolean): number => {
+      addContentPage(withTitle ? 'Day Wise Itinerary' : undefined);
+      itinPageHasContent = false;
+      return withTitle ? 132 : 85;
+    };
     for (const [dayIndex, day] of days.entries()) {
       const activities = day.activities?.length
         ? day.activities
         : [{ name: day.title ?? `Day ${day.dayNumber}`, description: '' }];
       for (const activity of activities) {
-        const top = activityPage === 0 ? 132 : 85;
         const richDescription = htmlToRichTextLines(activity.description);
         const bodySize = 9;
         const bodyWidth = CONTENT_W - 54;
@@ -2333,7 +2349,39 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
             .join(' · ')}</p>`;
           displayPricingLines = htmlToRichTextLines(pricingHtml);
         }
-        addContentPage(activityPage === 0 ? 'Day Wise Itinerary' : undefined);
+        // Measure the complete day up front (details + title + description +
+        // pricing + the gap that would precede it) so placement is decided by
+        // actual rendered height. Nothing is shrunk to fit.
+        const activityTitle = clean(activity.name);
+        const shouldShowActivityTitle =
+          !!activityTitle && !isItineraryActivityTitleDuplicate(day.title, activityTitle);
+        const titleH = shouldShowActivityTitle ? 28 : 0;
+        let descH = 0;
+        for (const line of richDescription) {
+          const need = measureRichHeight([line], bodyWidth, bodySize, bodyFactor);
+          if (need > 0) descH += need;
+        }
+        let priceH = 0;
+        if (displayPricingLines.length) {
+          priceH += 8;
+          for (const line of displayPricingLines) {
+            const need = measureRichHeight([line], bodyWidth, bodySize, bodyFactor);
+            if (need > 0) priceH += need;
+          }
+        }
+        const blockH = ITIN_DETAILS_H + titleH + descH + priceH;
+        let top: number;
+        if (itinFirstDay) {
+          top = startItinPage(true);
+          itinFirstDay = false;
+        } else if (itinPageHasContent && yy + ITIN_DAY_GAP + blockH > bodyBottom()) {
+          // The whole day moves to a fresh A4 page — never squeezed, never
+          // leaving its heading stranded at the bottom of this page.
+          top = startItinPage(false);
+        } else {
+          if (itinPageHasContent) yy += ITIN_DAY_GAP;
+          top = yy;
+        }
         // Day details sit directly on the white page — no enclosing card,
         // background, border, shadow or rounded container. The destination
         // image keeps its own rounded corners; the DAY badge, title, date,
@@ -2441,10 +2489,8 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
         // side icon/line. Rich-text structure and styling are untouched;
         // long copy paginates onto follow-up pages instead of clipping or
         // overlapping the footer.
-        let yy = top + 184;
-        const activityTitle = clean(activity.name);
-        const shouldShowActivityTitle =
-          !!activityTitle && !isItineraryActivityTitleDuplicate(day.title, activityTitle);
+        yy = top + ITIN_DETAILS_H;
+        itinPageHasContent = true;
         if (shouldShowActivityTitle) {
           const titleH = 22;
           if (yy + titleH + 6 > bodyBottom()) {
@@ -2483,10 +2529,9 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
             yy = drawRichLines([line], ITIN_TEXT_LEFT, yy, bodyWidth, bodySize, INK, bodyFactor);
           }
         }
-        y = yy + 10;
-        activityPage += 1;
       }
     }
+    if (!itinFirstDay) y = yy + 10;
   };
 
   // Travel services and add-ons -------------------------------------------
