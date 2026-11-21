@@ -598,19 +598,28 @@ describe('Stylish quotation PDF', () => {
 
     for (const pdf of [await renderQuotationPdf(input), await renderStylishQuotationPdf(input)]) {
       const visible = pdfText(pdf);
-      expect(visible).toContain('3:30 PM');
-      expect(visible).toContain('11:15 AM');
+      expect(visible).toContain('6 Jan 2027');
+      expect(visible).toContain('8 Jan 2027');
     }
+    // Classic keeps the per-stay times; Stylish renders prominent plain-text
+    // dates with no times, boxes, pills or review links (approved mockup).
+    const classicTimesText = pdfText(await renderQuotationPdf(input));
+    expect(classicTimesText).toContain('3:30 PM');
+    expect(classicTimesText).toContain('11:15 AM');
+    const stylishTimesText = pdfText(await renderStylishQuotationPdf(input));
+    expect(stylishTimesText).not.toContain('3:30 PM');
+    expect(stylishTimesText).not.toContain('11:15 AM');
 
     const stylishHotelPdf = await renderStylishQuotationPdf(input);
     const stylishHotelText = pdfText(stylishHotelPdf);
     expect(stylishHotelText).toContain('★★★★★');
     expect(stylishHotelText).toContain('10 Bayfront Avenue, Singapore 018956');
-    expect(stylishHotelText).toContain('4.6');
-    expect(stylishHotelText).toContain('Check Hotel Review');
-    expect(stylishHotelPdf.toString('latin1')).toContain(
-      '/URI (https://example.com/hotels/marina-bay)',
-    );
+    expect(stylishHotelText).toContain('Check-in');
+    expect(stylishHotelText).toContain('Check-out');
+    // No numerical ratings, review links or review URIs in Stylish output.
+    expect(stylishHotelText).not.toContain('4.6');
+    expect(stylishHotelText).not.toContain('Check Hotel Review');
+    expect(stylishHotelPdf.toString('latin1')).not.toContain('example.com/hotels/marina-bay');
 
     const noReviewPdf = await renderStylishQuotationPdf({
       ...input,
@@ -650,14 +659,14 @@ describe('Stylish quotation PDF', () => {
         ],
       },
     };
-    for (const pdf of [
-      await renderQuotationPdf(hiddenCheckIn),
-      await renderStylishQuotationPdf(hiddenCheckIn),
-    ]) {
-      const visible = pdfText(pdf);
-      expect(visible).not.toContain('3:30 PM');
-      expect(visible).toContain('11:15 AM');
-    }
+    const hiddenClassicText = pdfText(await renderQuotationPdf(hiddenCheckIn));
+    expect(hiddenClassicText).not.toContain('3:30 PM');
+    expect(hiddenClassicText).toContain('11:15 AM');
+    // Stylish shows plain-text dates only — no times at all.
+    const hiddenStylishText = pdfText(await renderStylishQuotationPdf(hiddenCheckIn));
+    expect(hiddenStylishText).not.toContain('3:30 PM');
+    expect(hiddenStylishText).not.toContain('11:15 AM');
+    expect(hiddenStylishText).toContain('8 Jan 2027');
     expect(pdfText(await renderQuotationPdf(hiddenCheckIn))).not.toContain('Rooms:');
   });
 

@@ -6,7 +6,6 @@ import {
   formatAgeList,
   formatInfantAgeList,
   flightRecordPrefix,
-  hotelStayNights,
   isItineraryActivityTitleDuplicate,
   isPublicTaxNote,
   normalizeFaqs,
@@ -2083,204 +2082,217 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
     const selectedHotels = input.version.hotels
       .map((hotel, index) => ({ hotel, index }))
       .filter(({ hotel }) => hotel.selected);
-    if (selectedHotels.length) {
-      // Multi-room / multi-meal hotel options grow their card by 11pt per
-      // extra list line, so EVERY room allocation and meal plan stays visible
-      // without changing the card design for legacy single-room options.
-      const cardLayouts = selectedHotels.map(({ hotel, index }) => {
-        const roomLines = resolveHotelRoomLines(hotel);
-        const mealLines = resolveHotelMealPlanLines(hotel);
-        const extraLines =
-          (roomLines.length > 1 ? roomLines.length : 0) +
-          (mealLines.length > 1 ? mealLines.length : 0);
-        return { hotel, index, roomLines, mealLines, extraLines, cardH: 154 + extraLines * 11 };
-      });
-      for (let pageStart = 0; pageStart < cardLayouts.length; pageStart += 3) {
-        const pageCards = cardLayouts.slice(pageStart, pageStart + 3);
-        const contentBottom = 118 + pageCards.reduce((sum, card) => sum + card.cardH + 15, 0);
-        const layout = computePageHeight(contentBottom - PDF_TOP_MARGIN);
-        addContentPage('Hotel Accommodations', layout.pageHeight);
-        for (const { hotel, index, roomLines, mealLines, extraLines, cardH } of pageCards) {
-          const top = y;
-          const listMode = roomLines.length > 1 || mealLines.length > 1;
-          const presentation = input.hotelPresentations?.[index];
-          const categoryStars = Number.parseInt(hotel.category ?? '', 10);
-          const starCount = Math.max(
-            0,
-            Math.min(
-              5,
-              presentation?.starCategory ?? (Number.isFinite(categoryStars) ? categoryStars : 0),
-            ),
-          );
-          const address = presentation?.address?.trim() ?? '';
-          const rating = presentation?.starRating == null ? null : Number(presentation.starRating);
-          const reviewLink = presentation?.reviewLink?.trim() ?? '';
-          const validReviewLink = /^https?:\/\//i.test(reviewLink) ? reviewLink : '';
-          rounded(M, top, CONTENT_W, cardH, '#ffffff', LINE, 8);
-          doc
-            .moveTo(M + 1, top)
-            .lineTo(M + 1, top + cardH)
-            .lineWidth(2)
-            .strokeColor(NAVY)
-            .stroke();
-          if (!drawImage(input.images?.hotels?.[index], M + 17, top + 11, 106, 122)) {
-            doc.roundedRect(M + 17, top + 11, 106, 122, 7).fill('#e7edf4');
-            drawEmoji('🏨', M + 53, top + 54, 34);
-          }
-          const infoX = M + 136;
-          const title = hotel.hotelName.trim();
-          doc.font('Bold').fontSize(11);
-          const starsText = '★'.repeat(starCount);
-          const starsWidth = starCount ? doc.widthOfString(starsText) : 0;
-          const titleWidth = Math.min(doc.widthOfString(title), Math.max(120, 360 - starsWidth - 10));
-          doc
-            .font('Bold')
-            .fontSize(11)
-            .fillColor(NAVY)
-            .text(title, infoX, top + 13, {
-              width: titleWidth,
-              height: 15,
-              ellipsis: true,
-            });
-          if (starCount) {
-            doc
-              .font('Bold')
-              .fontSize(11)
-              .fillColor(GOLD)
-              .text(starsText, infoX + titleWidth + 7, top + 12, { width: starsWidth + 2 });
-          }
-          pill(hotel.city || 'Destination', infoX, top + 32, {
-            fill: NAVY,
-            color: '#ffffff',
-            minWidth: 58,
-            height: 17,
-            size: 6.5,
-          });
-          if (address) {
-            doc
-              .font('Body')
-              .fontSize(6.5)
-              .fillColor(MUTED)
-              .text(address, infoX + 68, top + 36, {
-                width: 292,
-                height: 10,
-                ellipsis: true,
-              });
-          }
-          const hotelFacts: Array<[string, string, string]> = [
-            [
-              'CHECK-IN',
-              date(hotel.checkInDate),
-              hotel.checkInTime?.trim() ? formatClock12Hour(hotel.checkInTime) : '',
-            ],
-            [
-              'CHECK-OUT',
-              date(hotel.checkOutDate),
-              hotel.checkOutTime?.trim() ? formatClock12Hour(hotel.checkOutTime) : '',
-            ],
-          ];
-          // Room type / meal plan are optional: an empty value renders no fact
-          // box at all (no "-", "N/A" or other placeholder). Remaining boxes
-          // reflow into the vacated columns. In list mode (multiple rooms or
-          // meal plans) the boxes are replaced by the full list block below.
-          // Stay dates are optional: a dateless option carries NULL nights, so
-          // the "N Nights" sub-line is left blank instead of inventing a
-          // duration (empty sub-lines are the established empty rendering).
-          const stayNights = hotelStayNights(hotel.checkInDate, hotel.checkOutDate) ?? hotel.nights;
-          const nightsSub = stayNights != null ? `${stayNights} Nights` : '';
-          const roomType = listMode ? undefined : (hotel.roomType?.trim() ?? undefined);
-          if (roomType) {
-            hotelFacts.push([
-              'ROOM TYPE',
-              roomType,
-              hotel.rooms != null ? `${hotel.rooms} Room${hotel.rooms === 1 ? '' : 's'}` : '',
-            ]);
-          }
-          const mealPlan = listMode ? undefined : (hotel.mealPlan?.trim() ?? undefined);
-          if (mealPlan) {
-            hotelFacts.push(['MEAL PLAN', mealPlan, nightsSub]);
-          }
-          const extraBedQty = (hotel as unknown as { extraBedQuantity?: number | null }).extraBedQuantity;
-          if (!listMode && extraBedQty) {
-            // Counts only — no per-item prices on the customer-facing PDF.
-            hotelFacts.push(['EXTRA BED', `${extraBedQty}`, nightsSub]);
-          }
-          const childQty = (hotel as unknown as { childWithoutBedQuantity?: number | null }).childWithoutBedQuantity;
-          if (!listMode && childQty) {
-            hotelFacts.push(['CHILD W/O BED', `${childQty}`, nightsSub]);
-          }
-          hotelFacts.forEach(([label, value, sub], factIndex) => {
-            const left = infoX + factIndex * 88;
-            rounded(left, top + 55, 82, 54, PALE_BLUE, PALE_BLUE, 6);
-            doc
-              .font('Body')
-              .fontSize(6.2)
-              .fillColor(MUTED)
-              .text(label, left + 8, top + 64, { width: 66 });
-            doc
-              .font('Bold')
-              .fontSize(7.5)
-              .fillColor(NAVY)
-              .text(value, left + 8, top + 80, { width: 66, height: 14 });
-            doc
-              .font('Body')
-              .fontSize(6.5)
-              .fillColor(MUTED)
-              .text(sub, left + 8, top + 98, { width: 66 });
-          });
-          // Full list of every room allocation and meal plan (list mode only).
-          if (listMode) {
-            const listWidth = CONTENT_W - (infoX - M) - 10;
-            let listY = top + 113;
-            const drawListLine = (text: string) => {
-              doc
-                .font('Body')
-                .fontSize(6.5)
-                .fillColor(INK)
-                .text(text, infoX, listY, { width: listWidth, height: 10, ellipsis: true });
-              listY += 11;
-            };
-            roomLines.forEach((line, j) => {
-              const name = (line.roomType ?? '').trim() || 'Room';
-              // Counts only — no per-item prices on the customer-facing PDF.
-              const bits = [`${j + 1}. ${name}`];
-              if (line.rooms != null) bits.push(`${line.rooms} Room${line.rooms === 1 ? '' : 's'}`);
-              if (line.extraBedQuantity) bits.push(`Extra Bed: ${line.extraBedQuantity}`);
-              if (line.childWithoutBedQuantity)
-                bits.push(`Child W/O Bed: ${line.childWithoutBedQuantity}`);
-              drawListLine(bits.join(' — '));
-            });
-            if (mealLines.length > 1) {
-              mealLines.forEach((line, j) => {
-                drawListLine(`Meal Plan ${j + 1}: ${(line.mealPlan ?? '').trim()}`);
-              });
-            }
-          }
-          const reviewTop = top + 121 + extraLines * 11;
-          if (validReviewLink) {
-            let reviewX = infoX;
-            if (rating != null && Number.isFinite(rating)) {
-              rounded(reviewX, reviewTop, 28, 20, GOLD, GOLD, 4);
-              doc
-                .font('Bold')
-                .fontSize(7.5)
-                .fillColor(NAVY_DARK)
-                .text(String(rating), reviewX, reviewTop + 6, { width: 28, align: 'center' });
-              reviewX += 38;
-            }
-            if (validReviewLink) {
-              const reviewText = 'Check Hotel Review >>';
-              doc
-                .font('Body')
-                .fontSize(7)
-                .fillColor(NAVY)
-                .text(reviewText, reviewX, reviewTop + 6, { width: 145, link: validReviewLink });
-            }
-          }
-          y += cardH + 15;
-        }
+    if (!selectedHotels.length) return;
+    const infoX = M + 136;
+    const textW = CONTENT_W - (infoX - M) - 10;
+    const IMAGE_TOP_OFF = 11;
+    const IMAGE_H = 122;
+    const HOTEL_GAP = 30;
+
+    // Minimal vector calendar glyph (outline + hanger ticks + centre dot).
+    const drawCalendarIcon = (x: number, top: number, size: number, color: string) => {
+      doc
+        .save()
+        .roundedRect(x, top, size, size, size * 0.18)
+        .lineWidth(1.4)
+        .strokeColor(color)
+        .stroke()
+        .restore();
+      doc
+        .save()
+        .moveTo(x + 2, top + size * 0.34)
+        .lineTo(x + size - 2, top + size * 0.34)
+        .lineWidth(1.1)
+        .strokeColor(color)
+        .stroke()
+        .restore();
+      doc
+        .save()
+        .lineWidth(1.4)
+        .strokeColor(color)
+        .moveTo(x + size * 0.3, top - 1.5)
+        .lineTo(x + size * 0.3, top + size * 0.22)
+        .moveTo(x + size * 0.7, top - 1.5)
+        .lineTo(x + size * 0.7, top + size * 0.22)
+        .stroke()
+        .restore();
+      doc.save().fillColor(color).circle(x + size / 2, top + size * 0.66, 1.7).fill().restore();
+    };
+
+    // Real saved dates only: missing or invalid stays absent (never
+    // "As advised", never invented).
+    const stayDate = (value: unknown): string | null => {
+      if (value == null || String(value).trim() === '') return null;
+      const formatted = date(value as Date | string, false);
+      return formatted === 'As advised' ? null : formatted;
+    };
+
+    type HotelBlock = {
+      hotel: (typeof selectedHotels)[number]['hotel'];
+      index: number;
+      starCount: number;
+      nameH: number;
+      address: string;
+      addressH: number;
+      checkIn: string | null;
+      checkOut: string | null;
+      roomTexts: string[];
+      blockH: number;
+    };
+    // Measure every listing up front so page breaks are decided by actual
+    // rendered height. Nothing is shrunk to fit.
+    const blocks: HotelBlock[] = selectedHotels.map(({ hotel, index }) => {
+      const presentation = input.hotelPresentations?.[index];
+      const categoryStars = Number.parseInt(hotel.category ?? '', 10);
+      const starCount = Math.max(
+        0,
+        Math.min(
+          5,
+          presentation?.starCategory ?? (Number.isFinite(categoryStars) ? categoryStars : 0),
+        ),
+      );
+      doc.font('Bold').fontSize(15);
+      const nameH = Math.max(19, doc.heightOfString(hotel.hotelName.trim(), { width: textW }));
+      const address = presentation?.address?.trim() ?? '';
+      let addressH = 0;
+      if (address) {
+        doc.font('Body').fontSize(8.5);
+        addressH = doc.heightOfString(address, { width: textW });
       }
+      const checkIn = stayDate(hotel.checkInDate);
+      const checkOut = stayDate(hotel.checkOutDate);
+      const roomLines = resolveHotelRoomLines(hotel);
+      const mealLines = resolveHotelMealPlanLines(hotel);
+      const roomTexts: string[] = [];
+      const numbered = roomLines.length > 1;
+      roomLines.forEach((line, j) => {
+        const name = (line.roomType ?? '').trim() || 'Room';
+        // Counts only — no per-item prices on the customer-facing PDF.
+        const bits = [numbered ? `${j + 1}. ${name}` : name];
+        if (line.rooms != null) bits.push(`${line.rooms} Room${line.rooms === 1 ? '' : 's'}`);
+        if (line.extraBedQuantity) bits.push(`Extra Bed: ${line.extraBedQuantity}`);
+        if (line.childWithoutBedQuantity) bits.push(`Child W/O Bed: ${line.childWithoutBedQuantity}`);
+        roomTexts.push(bits.join(' – '));
+      });
+      if (mealLines.length > 1) {
+        mealLines.forEach((line, j) => {
+          roomTexts.push(`Meal Plan ${j + 1}: ${(line.mealPlan ?? '').trim()}`);
+        });
+      } else if (mealLines.length === 1 && (mealLines[0]?.mealPlan ?? '').trim()) {
+        roomTexts.push(`Meal Plan: ${(mealLines[0]?.mealPlan ?? '').trim()}`);
+      }
+      doc.font('Body').fontSize(9);
+      let roomsH = 0;
+      for (const text of roomTexts) roomsH += doc.heightOfString(text, { width: textW }) + 4;
+      let contentH = 13 + nameH + 6;
+      if (starCount) contentH += 5 + 16;
+      if (address) contentH += addressH + 10;
+      if (checkIn || checkOut) contentH += 30 + 12;
+      contentH += roomsH;
+      return {
+        hotel,
+        index,
+        starCount,
+        nameH,
+        address,
+        addressH,
+        checkIn,
+        checkOut,
+        roomTexts,
+        blockH: Math.max(IMAGE_TOP_OFF + IMAGE_H, contentH),
+      };
+    });
+
+    const drawBlock = (block: HotelBlock, top: number): number => {
+      const { hotel, index } = block;
+      let cy = top + 13;
+      if (!drawImage(input.images?.hotels?.[index], M + 17, top + IMAGE_TOP_OFF, 106, IMAGE_H)) {
+        doc.roundedRect(M + 17, top + IMAGE_TOP_OFF, 106, IMAGE_H, 7).fill('#e7edf4');
+        drawEmoji('🏨', M + 53, top + 54, 34);
+      }
+      doc
+        .font('Bold')
+        .fontSize(15)
+        .fillColor(NAVY)
+        .text(hotel.hotelName.trim(), infoX, cy, { width: textW });
+      cy += block.nameH;
+      if (block.starCount) {
+        doc
+          .font('Bold')
+          .fontSize(13)
+          .fillColor(GOLD)
+          .text('★'.repeat(block.starCount), infoX, cy + 5, { width: textW });
+        cy += 5 + 16;
+      }
+      cy += 6;
+      if (block.address) {
+        doc.font('Body').fontSize(8.5).fillColor(INK).text(block.address, infoX, cy, { width: textW });
+        cy += block.addressH;
+        cy += 10;
+      }
+      if (block.checkIn || block.checkOut) {
+        const drawDateCol = (x: number, label: string, value: string, iconColor: string) => {
+          drawCalendarIcon(x, cy + 5, 18, iconColor);
+          doc.font('Body').fontSize(8.5).fillColor(INK).text(label, x + 24, cy, { width: 140 });
+          doc.font('Bold').fontSize(14).fillColor(NAVY).text(value, x + 24, cy + 12, { width: 150 });
+        };
+        if (block.checkIn && block.checkOut) {
+          drawDateCol(infoX, 'Check-in', block.checkIn, TEAL);
+          const dividerX = infoX + 178;
+          doc
+            .moveTo(dividerX, cy + 2)
+            .lineTo(dividerX, cy + 28)
+            .lineWidth(0.7)
+            .strokeColor(LINE)
+            .stroke();
+          drawDateCol(infoX + 194, 'Check-out', block.checkOut, GOLD);
+        } else if (block.checkIn) {
+          drawDateCol(infoX, 'Check-in', block.checkIn, TEAL);
+        } else if (block.checkOut) {
+          drawDateCol(infoX, 'Check-out', block.checkOut, GOLD);
+        }
+        cy += 30;
+        cy += 12;
+      }
+      doc.font('Body').fontSize(9).fillColor(INK);
+      for (const text of block.roomTexts) {
+        if (cy + 12 > bodyBottom()) {
+          addContentPage('Hotel Accommodations');
+          cy = y;
+        }
+        const need = doc.heightOfString(text, { width: textW });
+        if (cy + need > bodyBottom()) {
+          addContentPage('Hotel Accommodations');
+          cy = y;
+        }
+        doc.text(text, infoX, cy, { width: textW });
+        cy += need + 4;
+      }
+      return Math.max(top + IMAGE_TOP_OFF + IMAGE_H, cy);
+    };
+    let firstHotelPage = true;
+    let yy = 0;
+    let hotelPageHasContent = false;
+    const startHotelPage = (): number => {
+      addContentPage('Hotel Accommodations');
+      hotelPageHasContent = false;
+      return y;
+    };
+    for (const block of blocks) {
+      if (firstHotelPage) {
+        yy = startHotelPage();
+        firstHotelPage = false;
+      } else if (hotelPageHasContent && yy + HOTEL_GAP + block.blockH > bodyBottom()) {
+        // The whole listing moves to a fresh A4 page — never squeezed, never
+        // overlapping the footer or the next listing.
+        yy = startHotelPage();
+      } else {
+        if (hotelPageHasContent) yy += HOTEL_GAP;
+      }
+      yy = drawBlock(block, yy);
+      hotelPageHasContent = true;
     }
+    y = yy + 10;
   };
 
   // Day-wise itinerary -----------------------------------------------------
