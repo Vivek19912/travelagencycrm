@@ -241,7 +241,7 @@ if (stored) {
 // Compare image boxes: old (globe) vs fresh.
 const S = 150 / 72;
 const boxMean = async (file: string, top: number): Promise<[number, number, number]> => {
-  const img = sharp(file).extract({ left: Math.round(54 * S), top: Math.round((top + 12) * S), width: Math.round(165 * S), height: Math.round(142 * S) }).raw();
+  const img = sharp(file).extract({ left: Math.round(54 * S), top: Math.round((top + 12) * S), width: Math.round(198 * S), height: Math.round(170 * S) }).raw();
   const buf = await img.toBuffer();
   let r = 0, g = 0, b = 0;
   for (let i = 0; i < buf.length; i += 3) { r += buf[i]!; g += buf[i + 1]!; b += buf[i + 2]!; }

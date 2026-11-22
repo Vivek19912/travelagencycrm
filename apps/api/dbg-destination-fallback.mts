@@ -95,7 +95,7 @@ writeFileSync('../../tmp/footer-verify/itinerary-destfallback.pdf', pdf);
 console.log('bytes', pdf.length);
 
 // Assert the rendered image-box colour per itinerary page (pages 3-8).
-// Box geometry (pt): x=M+12, y=top+12, w=165, h=142; first page top=132.
+// Box geometry (pt): x=M+12, y=top+12, w=198, h=170; first page top=132.
 const { default: sharpLib } = await import('sharp');
 const S = 150 / 72;
 const pngPrefix = '../../tmp/footer-verify/destfb';
@@ -121,7 +121,7 @@ for (const { page, label, rgb } of expected) {
   // corner, away from the centred globe emoji.
   const patch = rgb === 'globe'
     ? { left: boxLeft + 8, top: boxTop + 8, width: 30, height: 30 }
-    : { left: Math.round((42 + 12 + 165 / 2) * S) - 20, top: Math.round((top + 12 + 142 / 2) * S) - 20, width: 40, height: 40 };
+    : { left: Math.round((42 + 12 + 198 / 2) * S) - 20, top: Math.round((top + 12 + 170 / 2) * S) - 20, width: 40, height: 40 };
   const sample = await sharpLib(file).extract(patch).raw().toBuffer();
   let r = 0, g = 0, b = 0;
   for (let i = 0; i < sample.length; i += 3) { r += sample[i]!; g += sample[i + 1]!; b += sample[i + 2]!; }

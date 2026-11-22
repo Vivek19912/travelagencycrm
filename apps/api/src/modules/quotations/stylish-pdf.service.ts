@@ -2308,13 +2308,14 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
             mealsText: day.meals,
             activities: [{ name: day.title, description: day.description }],
           }));
-    // Small outline calendar glyph used by the day badge, date rows and
-    // transfer pills (colour set by the caller).
+    // Outline calendar glyph with hanger ticks, header line and a small
+    // date grid — used by the day badge and the travel-date rows.
     const drawBadgeCalendar = (x: number, top: number, size: number, color: string) => {
+      const lw = Math.max(1, size * 0.075);
       doc
         .save()
-        .roundedRect(x, top, size, size, size * 0.18)
-        .lineWidth(Math.max(1, size * 0.075))
+        .roundedRect(x, top, size, size, size * 0.2)
+        .lineWidth(lw)
         .strokeColor(color)
         .stroke()
         .restore();
@@ -2336,7 +2337,18 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
         .lineTo(x + size * 0.7, top + size * 0.22)
         .stroke()
         .restore();
-      doc.save().fillColor(color).circle(x + size / 2, top + size * 0.64, Math.max(1.2, size * 0.08)).fill().restore();
+      // 2x2 date-grid marks in the lower half.
+      const dotR = Math.max(0.9, size * 0.05);
+      const gridCx = x + size / 2;
+      const gridCy = top + size * 0.64;
+      const gridGap = size * 0.16;
+      doc.save().fillColor(color);
+      for (const ox of [-gridGap / 2, gridGap / 2]) {
+        for (const oy of [-gridGap / 2, gridGap / 2]) {
+          doc.circle(gridCx + ox, gridCy + oy, dotR).fill();
+        }
+      }
+      doc.restore();
     };
     // Intelligent pagination: consecutive days share a page whenever the
     // whole next day (details + complete description) fits in the remaining
@@ -2396,11 +2408,11 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
           !!activityTitle && !isItineraryActivityTitleDuplicate(day.title, activityTitle);
         const titleH = shouldShowActivityTitle ? 28 : 0;
         // Approved header layout (badge, title, date row, meals, transfer
-        // pill, separator, description accent): measured here, drawn below.
+        // pill): measured here, drawn below.
         const dayNum = day.dayNumber ?? dayIndex + 1;
-        doc.font('Bold').fontSize(19);
-        const badgeW = 40 + doc.widthOfString(`Day ${dayNum}`) + 14;
-        const dayX = M + 195;
+        doc.font('Bold').fontSize(13);
+        const badgeW = 28 + doc.widthOfString(`Day ${dayNum}`) + 10;
+        const dayX = M + 12 + 198 + 18;
         const titleW = W - M - dayX - 10;
         const dayStrippedRaw = stripItineraryDayPrefixes(day.title);
         const displayTitle = dayStrippedRaw || `Day ${day.dayNumber}`;
@@ -2423,16 +2435,12 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
         doc.font('Body').fontSize(9);
         const mealsH = mealText ? Math.max(14, doc.heightOfString(mealText, { width: mealTextW })) : 0;
         const transfer = transferLabel(activity.dailyTransfer ?? day.dailyTransfer);
-        doc.font('Bold').fontSize(10.5);
-        const pillTextW = transfer ? doc.widthOfString(transfer) : 0;
-        const pillW = transfer ? 30 + pillTextW + 22 : 0;
         let detailsH = 16 + headingH + 8;
         if (hasDateRow) detailsH += 18 + 8;
         if (mealText) detailsH += mealsH + 8;
-        if (transfer) detailsH += 30 + 8;
-        detailsH -= 8; // no trailing gap before the separator spacing
-        const sepOff = Math.max(154, detailsH) + 14;
-        const descTopOff = sepOff + 1 + 14;
+        if (transfer) detailsH += 20 + 8;
+        detailsH -= 8; // no trailing gap before the description
+        const descTopOff = Math.max(12 + 170, detailsH) + 14;
         let descH = 0;
         for (const line of richDescription) {
           const need = measureRichHeight([line], bodyWidth, bodySize, bodyFactor);
@@ -2479,32 +2487,32 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
           ? (input.images?.destinationImages?.[dayCityKey] ?? null)
           : (input.images?.cover ?? null);
         const imageValue = activityImage ?? dayDestinationImage ?? null;
-        if (!drawImage(imageValue, M + 12, top + 12, 165, 142, 'cover', 10)) {
+        if (!drawImage(imageValue, M + 12, top + 12, 198, 170, 'cover', 10)) {
           // A day image that exists but cannot be decoded falls back to the
           // destination image before the generic placeholder (Priority 3).
           const renderFallback =
             imageValue && dayDestinationImage && imageValue !== dayDestinationImage
-              ? drawImage(dayDestinationImage, M + 12, top + 12, 165, 142, 'cover', 10)
+              ? drawImage(dayDestinationImage, M + 12, top + 12, 198, 170, 'cover', 10)
               : false;
           if (!renderFallback) {
-            doc.roundedRect(M + 12, top + 12, 165, 142, 10).fill('#e3ebf3');
-            drawEmoji('🌍', M + 73, top + 63, 42);
+            doc.roundedRect(M + 12, top + 12, 198, 170, 10).fill('#e3ebf3');
+            drawEmoji('🌍', M + 90, top + 76, 42);
           }
         }
         // Approved day badge: navy plate over a gold accent layer, calendar
         // glyph and automatic "Day N" label, overlapping the image corner.
         const badgeX = M + 12 - 12;
-        const badgeY = top + 12 - 14;
-        const badgeH = 42;
-        doc.save().roundedRect(badgeX + 4, badgeY + 5, badgeW, badgeH, 10).fill(GOLD).restore();
-        doc.save().roundedRect(badgeX, badgeY, badgeW, badgeH, 10).fill(NAVY).restore();
-        drawBadgeCalendar(badgeX + 13, badgeY + 11, 20, '#ffffff');
+        const badgeY = top + 12 - 10;
+        const badgeH = 30;
+        doc.save().roundedRect(badgeX + 3, badgeY + 4, badgeW, badgeH, 7).fill(GOLD).restore();
+        doc.save().roundedRect(badgeX, badgeY, badgeW, badgeH, 7).fill(NAVY).restore();
+        drawBadgeCalendar(badgeX + 10, badgeY + 8, 14, '#ffffff');
         doc
           .font('Bold')
-          .fontSize(19)
+          .fontSize(13)
           .fillColor('#ffffff')
-          .text(`Day ${dayNum}`, badgeX + 41, badgeY + 9, {
-            width: badgeW - 41 - 8,
+          .text(`Day ${dayNum}`, badgeX + 30, badgeY + 7, {
+            width: badgeW - 30 - 8,
             lineBreak: false,
           });
         // Approved header: bold navy title, date | destination row, meals
@@ -2554,32 +2562,16 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
           cy += mealsH + 8;
         }
         if (transfer) {
-          doc.save().roundedRect(dayX, cy, pillW, 30, 15).fill(PALE_BLUE).restore();
-          const carX = dayX + 11;
-          const carY = cy + 8;
-          doc.save().roundedRect(carX, carY + 5, 22, 7, 2.5).fill(NAVY).restore();
-          doc.save().roundedRect(carX + 5, carY, 12, 6, 2).fill(NAVY).restore();
-          doc.save().fillColor(NAVY).circle(carX + 5.5, carY + 13, 2.3).fill().restore();
-          doc.save().fillColor(NAVY).circle(carX + 16.5, carY + 13, 2.3).fill().restore();
-          doc.font('Bold').fontSize(10.5).fillColor(NAVY).text(transfer, dayX + 40, cy + 9, { width: pillTextW + 4 });
-          cy += 30 + 8;
+          pill(transfer, dayX, cy, { minWidth: 92, height: 20, size: 6.5 });
+          cy += 20 + 8;
         }
         cy -= 8; // mirror the measured layout: no trailing gap
-        const sepY = top + Math.max(154, cy - top) + 14;
-        doc
-          .moveTo(M + 12, sepY)
-          .lineTo(W - M, sepY)
-          .lineWidth(0.7)
-          .strokeColor(LINE)
-          .stroke();
-        yy = sepY + 1 + 14;
+        yy = top + Math.max(12 + 170, cy - top) + 14;
 
-        // Description sits directly on the white page below the separator,
-        // with a slim gold accent bar. Rich-text structure and styling are
-        // untouched; long copy paginates onto follow-up pages instead of
-        // clipping or overlapping the footer.
-        const descBarTop = yy;
-        const descStartPages = doc.bufferedPageRange().count;
+        // Description sits directly on the white page below the day
+        // details. Rich-text structure and styling are untouched; long copy
+        // paginates onto follow-up pages instead of clipping or overlapping
+        // the footer.
         itinPageHasContent = true;
         if (shouldShowActivityTitle) {
           const titleH = 22;
@@ -2617,15 +2609,6 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
               yy = y;
             }
             yy = drawRichLines([line], ITIN_TEXT_LEFT, yy, bodyWidth, bodySize, INK, bodyFactor);
-          }
-        }
-        // Slim gold accent bar beside the description. Drawn only when the
-        // whole description stayed on its starting page, so follow-up pages
-        // keep clean plain-text flow.
-        if (doc.bufferedPageRange().count === descStartPages) {
-          const barH = yy - descBarTop;
-          if (barH > 10) {
-            doc.save().roundedRect(ITIN_TEXT_LEFT - 14, descBarTop, 4, barH, 2).fill(GOLD).restore();
           }
         }
       }
