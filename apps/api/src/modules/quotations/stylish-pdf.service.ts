@@ -2082,11 +2082,12 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
       .map((hotel, index) => ({ hotel, index }))
       .filter(({ hotel }) => hotel.selected);
     if (!selectedHotels.length) return;
-    const infoX = M + 168;
-    const textW = CONTENT_W - (infoX - M) - 10;
     const IMAGE_TOP_OFF = 11;
-    const IMAGE_W = 138;
-    const IMAGE_H = 159;
+    // Hotel photo size: +25% over the previous 138x159 rendering.
+    const IMAGE_W = 172.5;
+    const IMAGE_H = 198.75;
+    const infoX = M + 17 + IMAGE_W + 13;
+    const textW = CONTENT_W - (infoX - M) - 10;
     const HOTEL_GAP = 30;
 
     // Minimal vector calendar glyph (outline + hanger ticks + centre dot).
@@ -2208,7 +2209,7 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
       let cy = top + 13;
       if (!drawImage(input.images?.hotels?.[index], M + 17, top + IMAGE_TOP_OFF, IMAGE_W, IMAGE_H)) {
         doc.roundedRect(M + 17, top + IMAGE_TOP_OFF, IMAGE_W, IMAGE_H, 7).fill('#e7edf4');
-        drawEmoji('🏨', M + 69, top + 73, 34);
+        drawEmoji('🏨', M + 86, top + 93, 34);
       }
       doc
         .font('Bold')
@@ -2231,21 +2232,22 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
         cy += 10;
       }
       if (block.checkIn || block.checkOut) {
+        const colW = textW / 2;
         const drawDateCol = (x: number, label: string, value: string, iconColor: string) => {
           drawCalendarIcon(x, cy + 5, 18, iconColor);
-          doc.font('Body').fontSize(8.5).fillColor(INK).text(label, x + 24, cy, { width: 140 });
-          doc.font('Bold').fontSize(14).fillColor(NAVY).text(value, x + 24, cy + 12, { width: 150 });
+          doc.font('Body').fontSize(8.5).fillColor(INK).text(label, x + 24, cy, { width: colW - 24 });
+          doc.font('Bold').fontSize(14).fillColor(NAVY).text(value, x + 24, cy + 12, { width: colW - 24 });
         };
         if (block.checkIn && block.checkOut) {
           drawDateCol(infoX, 'Check-in', block.checkIn, TEAL);
-          const dividerX = infoX + 178;
+          const dividerX = infoX + colW;
           doc
             .moveTo(dividerX, cy + 2)
             .lineTo(dividerX, cy + 28)
             .lineWidth(0.7)
             .strokeColor(LINE)
             .stroke();
-          drawDateCol(infoX + 194, 'Check-out', block.checkOut, GOLD);
+          drawDateCol(infoX + colW + 16, 'Check-out', block.checkOut, GOLD);
         } else if (block.checkIn) {
           drawDateCol(infoX, 'Check-in', block.checkIn, TEAL);
         } else if (block.checkOut) {
