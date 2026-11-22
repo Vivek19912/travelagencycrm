@@ -63,9 +63,6 @@ const PALE_BLUE = '#eaf0f8';
 
 // ── Stylish itinerary – text inset for day descriptions ──────────
 const ITIN_TEXT_LEFT = M + 27;
-// Fixed day-details block: image/meta rows, then breathing room before the
-// description starts. Kept identical to the approved layout.
-const ITIN_DETAILS_H = 184;
 // Natural whitespace between consecutive days sharing one page.
 const ITIN_DAY_GAP = 24;
 
@@ -2311,6 +2308,36 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
             mealsText: day.meals,
             activities: [{ name: day.title, description: day.description }],
           }));
+    // Small outline calendar glyph used by the day badge, date rows and
+    // transfer pills (colour set by the caller).
+    const drawBadgeCalendar = (x: number, top: number, size: number, color: string) => {
+      doc
+        .save()
+        .roundedRect(x, top, size, size, size * 0.18)
+        .lineWidth(Math.max(1, size * 0.075))
+        .strokeColor(color)
+        .stroke()
+        .restore();
+      doc
+        .save()
+        .moveTo(x + size * 0.12, top + size * 0.34)
+        .lineTo(x + size * 0.88, top + size * 0.34)
+        .lineWidth(Math.max(1, size * 0.06))
+        .strokeColor(color)
+        .stroke()
+        .restore();
+      doc
+        .save()
+        .lineWidth(Math.max(1, size * 0.07))
+        .strokeColor(color)
+        .moveTo(x + size * 0.3, top - size * 0.08)
+        .lineTo(x + size * 0.3, top + size * 0.22)
+        .moveTo(x + size * 0.7, top - size * 0.08)
+        .lineTo(x + size * 0.7, top + size * 0.22)
+        .stroke()
+        .restore();
+      doc.save().fillColor(color).circle(x + size / 2, top + size * 0.64, Math.max(1.2, size * 0.08)).fill().restore();
+    };
     // Intelligent pagination: consecutive days share a page whenever the
     // whole next day (details + complete description) fits in the remaining
     // space. Heights are measured, never shrunk: a day that cannot fit moves
@@ -2368,6 +2395,44 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
         const shouldShowActivityTitle =
           !!activityTitle && !isItineraryActivityTitleDuplicate(day.title, activityTitle);
         const titleH = shouldShowActivityTitle ? 28 : 0;
+        // Approved header layout (badge, title, date row, meals, transfer
+        // pill, separator, description accent): measured here, drawn below.
+        const dayNum = day.dayNumber ?? dayIndex + 1;
+        doc.font('Bold').fontSize(19);
+        const badgeW = 40 + doc.widthOfString(`Day ${dayNum}`) + 14;
+        const dayX = M + 195;
+        const titleW = W - M - dayX - 10;
+        const dayStrippedRaw = stripItineraryDayPrefixes(day.title);
+        const displayTitle = dayStrippedRaw || `Day ${day.dayNumber}`;
+        doc.font('Bold').fontSize(17);
+        const headingH = Math.max(22, doc.heightOfString(displayTitle, { width: titleW }));
+        const rawDate = day.date ? date(day.date, true) : null;
+        const dateStr = rawDate && rawDate !== 'As advised' ? rawDate : null;
+        const cityStr = (day.city ?? '').trim() || null;
+        const hasDateRow = Boolean(dateStr || cityStr);
+        const mealText =
+          day.mealsText ||
+          (day.meals?.breakfast
+            ? `Breakfast (${day.mealMode === 'NO_TRANSFER' ? 'No Transfer' : 'Hotel'})`
+            : null) ||
+          (day.meals?.lunch ? 'Lunch' : null) ||
+          (day.meals?.dinner ? 'Dinner' : null);
+        doc.font('Bold').fontSize(9);
+        const mealLabelW = mealText ? doc.widthOfString('Meals:') : 0;
+        const mealTextW = titleW - mealLabelW - 20;
+        doc.font('Body').fontSize(9);
+        const mealsH = mealText ? Math.max(14, doc.heightOfString(mealText, { width: mealTextW })) : 0;
+        const transfer = transferLabel(activity.dailyTransfer ?? day.dailyTransfer);
+        doc.font('Bold').fontSize(10.5);
+        const pillTextW = transfer ? doc.widthOfString(transfer) : 0;
+        const pillW = transfer ? 30 + pillTextW + 22 : 0;
+        let detailsH = 16 + headingH + 8;
+        if (hasDateRow) detailsH += 18 + 8;
+        if (mealText) detailsH += mealsH + 8;
+        if (transfer) detailsH += 30 + 8;
+        detailsH -= 8; // no trailing gap before the separator spacing
+        const sepOff = Math.max(154, detailsH) + 14;
+        const descTopOff = sepOff + 1 + 14;
         let descH = 0;
         for (const line of richDescription) {
           const need = measureRichHeight([line], bodyWidth, bodySize, bodyFactor);
@@ -2381,7 +2446,7 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
             if (need > 0) priceH += need;
           }
         }
-        const blockH = ITIN_DETAILS_H + titleH + descH + priceH;
+        const blockH = descTopOff + titleH + descH + priceH;
         let top: number;
         if (itinFirstDay) {
           top = startItinPage(true);
@@ -2394,10 +2459,9 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
           if (itinPageHasContent) yy += ITIN_DAY_GAP;
           top = yy;
         }
-        // Day details sit directly on the white page — no enclosing card,
-        // background, border, shadow or rounded container. The destination
-        // image keeps its own rounded corners; the DAY badge, title, date,
-        // time, meals and transfer pill keep their existing design.
+        // Day details sit directly on the white page — approved header with
+        // badge, title, date/destination, meals and transport pill. The image
+        // keeps its rounded corners; fallbacks are unchanged.
         // Priority 1 — the day's own image (saved snapshot, then master).
         const activityImage =
           (activity.imageDocumentId
@@ -2427,81 +2491,95 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
             drawEmoji('🌍', M + 73, top + 63, 42);
           }
         }
-        const dayX = M + 195;
-        doc.roundedRect(dayX, top + 17, 55, 54, 9).fill(PALE_BLUE);
-        doc
-          .font('Body')
-          .fontSize(6.7)
-          .fillColor(TEAL)
-          .text('DAY', dayX, top + 25, { width: 55, align: 'center' });
+        // Approved day badge: navy plate over a gold accent layer, calendar
+        // glyph and automatic "Day N" label, overlapping the image corner.
+        const badgeX = M + 12 - 12;
+        const badgeY = top + 12 - 14;
+        const badgeH = 42;
+        doc.save().roundedRect(badgeX + 4, badgeY + 5, badgeW, badgeH, 10).fill(GOLD).restore();
+        doc.save().roundedRect(badgeX, badgeY, badgeW, badgeH, 10).fill(NAVY).restore();
+        drawBadgeCalendar(badgeX + 13, badgeY + 11, 20, '#ffffff');
         doc
           .font('Bold')
-          .fontSize(20)
-          .fillColor(NAVY)
-          .text(String(day.dayNumber ?? dayIndex + 1).padStart(2, '0'), dayX, top + 38, {
-            width: 55,
-            align: 'center',
+          .fontSize(19)
+          .fillColor('#ffffff')
+          .text(`Day ${dayNum}`, badgeX + 41, badgeY + 9, {
+            width: badgeW - 41 - 8,
             lineBreak: false,
           });
-        const dayStrippedRaw = stripItineraryDayPrefixes(day.title);
-        const displayTitle = dayStrippedRaw || `Day ${day.dayNumber}`;
-        doc
-          .font('Bold')
-          .fontSize(12)
-          .fillColor(INK)
-          .text(displayTitle, dayX + 68, top + 20, { width: 240, height: 37, ellipsis: true });
-        doc
-          .font('Body')
-          .fontSize(7.5)
-          .fillColor(MUTED)
-          .text(
-            `${date(day.date, true)}${day.city ? `  ·  ${day.city}` : ''}`,
-            dayX + 68,
-            top + 55,
-            {
-              width: 240,
-            },
-          );
-        let metaTop = top + 88;
-        if (activity.startTime) {
-          doc.font('Bold').fontSize(7.2).fillColor(NAVY).text('Time', dayX, metaTop);
-          doc
-            .font('Body')
-            .fontSize(8)
-            .fillColor(INK)
-            .text(
-              `${formatClock12Hour(activity.startTime)}${activity.duration ? `  |  ${activity.duration}` : ''}`,
-              dayX + 38,
-              metaTop,
-            );
-          metaTop += 20;
+        // Approved header: bold navy title, date | destination row, meals
+        // row and transport pill — all directly on the white page.
+        let cy = top + 16;
+        doc.font('Bold').fontSize(17).fillColor(NAVY).text(displayTitle, dayX, cy, { width: titleW });
+        cy += headingH + 8;
+        if (hasDateRow) {
+          let dx = dayX;
+          if (dateStr) {
+            drawBadgeCalendar(dx, cy + 1, 14, MUTED);
+            doc.font('Body').fontSize(9).fillColor(MUTED);
+            doc.text(dateStr, dx + 20, cy, { width: titleW, lineBreak: false });
+            dx += 20 + doc.widthOfString(dateStr) + 10;
+          }
+          if (dateStr && cityStr) {
+            doc
+              .moveTo(dx, cy + 2)
+              .lineTo(dx, cy + 14)
+              .lineWidth(0.8)
+              .strokeColor(LINE)
+              .stroke();
+            dx += 12;
+          }
+          if (cityStr) {
+            const pinCx = dx + 7;
+            doc.save().circle(pinCx, cy + 5, 4).lineWidth(1.2).strokeColor(MUTED).stroke().restore();
+            doc
+              .save()
+              .moveTo(pinCx - 3, cy + 7.5)
+              .lineTo(pinCx, cy + 13)
+              .lineTo(pinCx + 3, cy + 7.5)
+              .closePath()
+              .fillColor(MUTED)
+              .fill()
+              .restore();
+            doc.save().fillColor(MUTED).circle(pinCx, cy + 5, 1.3).fill().restore();
+            doc.font('Body').fontSize(9).fillColor(MUTED).text(cityStr, dx + 18, cy, { width: titleW });
+          }
+          cy += 18 + 8;
         }
-        const mealText =
-          day.mealsText ||
-          (day.meals?.breakfast
-            ? `Breakfast (${day.mealMode === 'NO_TRANSFER' ? 'No Transfer' : 'Hotel'})`
-            : null) ||
-          (day.meals?.lunch ? 'Lunch' : null) ||
-          (day.meals?.dinner ? 'Dinner' : null);
         if (mealText) {
-          doc.font('Bold').fontSize(7.2).fillColor(NAVY).text('Meals', dayX, metaTop);
-          doc.circle(dayX + 42, metaTop + 4, 4).fill(GOLD);
-          doc
-            .font('Body')
-            .fontSize(8)
-            .fillColor(INK)
-            .text(mealText, dayX + 54, metaTop, { width: 185 });
-          metaTop += 20;
+          doc.font('Bold').fontSize(9).fillColor(NAVY).text('Meals:', dayX, cy, { width: mealLabelW + 2 });
+          const dotCx = dayX + mealLabelW + 10;
+          doc.save().fillColor(GOLD).circle(dotCx + 2, cy + 5, 4).fill().restore();
+          doc.font('Body').fontSize(9).fillColor(INK).text(mealText, dotCx + 10, cy, { width: mealTextW });
+          cy += mealsH + 8;
         }
-        const transfer = transferLabel(activity.dailyTransfer ?? day.dailyTransfer);
-        if (transfer) pill(transfer, dayX, metaTop, { minWidth: 92, height: 20, size: 6.5 });
+        if (transfer) {
+          doc.save().roundedRect(dayX, cy, pillW, 30, 15).fill(PALE_BLUE).restore();
+          const carX = dayX + 11;
+          const carY = cy + 8;
+          doc.save().roundedRect(carX, carY + 5, 22, 7, 2.5).fill(NAVY).restore();
+          doc.save().roundedRect(carX + 5, carY, 12, 6, 2).fill(NAVY).restore();
+          doc.save().fillColor(NAVY).circle(carX + 5.5, carY + 13, 2.3).fill().restore();
+          doc.save().fillColor(NAVY).circle(carX + 16.5, carY + 13, 2.3).fill().restore();
+          doc.font('Bold').fontSize(10.5).fillColor(NAVY).text(transfer, dayX + 40, cy + 9, { width: pillTextW + 4 });
+          cy += 30 + 8;
+        }
+        cy -= 8; // mirror the measured layout: no trailing gap
+        const sepY = top + Math.max(154, cy - top) + 14;
+        doc
+          .moveTo(M + 12, sepY)
+          .lineTo(W - M, sepY)
+          .lineWidth(0.7)
+          .strokeColor(LINE)
+          .stroke();
+        yy = sepY + 1 + 14;
 
-        // Description sits directly on the white page, immediately below the
-        // day details — no enclosing box, background, border, shadow or
-        // side icon/line. Rich-text structure and styling are untouched;
-        // long copy paginates onto follow-up pages instead of clipping or
-        // overlapping the footer.
-        yy = top + ITIN_DETAILS_H;
+        // Description sits directly on the white page below the separator,
+        // with a slim gold accent bar. Rich-text structure and styling are
+        // untouched; long copy paginates onto follow-up pages instead of
+        // clipping or overlapping the footer.
+        const descBarTop = yy;
+        const descStartPages = doc.bufferedPageRange().count;
         itinPageHasContent = true;
         if (shouldShowActivityTitle) {
           const titleH = 22;
@@ -2539,6 +2617,15 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
               yy = y;
             }
             yy = drawRichLines([line], ITIN_TEXT_LEFT, yy, bodyWidth, bodySize, INK, bodyFactor);
+          }
+        }
+        // Slim gold accent bar beside the description. Drawn only when the
+        // whole description stayed on its starting page, so follow-up pages
+        // keep clean plain-text flow.
+        if (doc.bufferedPageRange().count === descStartPages) {
+          const barH = yy - descBarTop;
+          if (barH > 10) {
+            doc.save().roundedRect(ITIN_TEXT_LEFT - 14, descBarTop, 4, barH, 2).fill(GOLD).restore();
           }
         }
       }

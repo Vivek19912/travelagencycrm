@@ -407,7 +407,8 @@ describe('Stylish quotation PDF', () => {
     const visible = pdfText(pdf);
     expect(visible).toContain('Singapore Package for Mira Shah');
     expect(visible).toContain('DAY WISE ITINERARY');
-    expect(visible).toContain('9:00 AM');
+    expect(visible).toContain('Sat, 09 Jan 2027');
+    expect(visible).not.toContain('9:00 AM');
     expect(visible).toContain('Jurassic Park Rapids Adventure');
     expect(visible).toContain('THANK YOU');
   });
@@ -931,12 +932,19 @@ describe('Stylish quotation PDF', () => {
     for (const pdf of [await renderQuotationPdf(input), await renderStylishQuotationPdf(input)]) {
       const visible = pdfText(pdf);
       expect(visible).toContain('Morning Tour');
-      expect(visible).toContain('9:00 AM');
-      // A populated time shows even when the removed checkbox stored false.
       expect(visible).toContain('Evening Tour');
-      expect(visible).toContain('6:30 PM');
       expect(visible).toContain('Untimed Visit');
     }
+    // Times render in 12-hour format in the Classic PDF (a populated time
+    // shows even when the removed checkbox stored false). The approved
+    // Stylish day header shows the date instead and carries no per-activity
+    // times.
+    const classicVisible = pdfText(await renderQuotationPdf(input));
+    expect(classicVisible).toContain('9:00 AM');
+    expect(classicVisible).toContain('6:30 PM');
+    const stylishVisible = pdfText(await renderStylishQuotationPdf(input));
+    expect(stylishVisible).not.toContain('9:00 AM');
+    expect(stylishVisible).not.toContain('6:30 PM');
   });
 });
 
