@@ -56,6 +56,8 @@ const GOLD = '#fdbb16';
 const TEAL = '#0a6f98';
 const GREEN = '#0ea36d';
 const RED = '#d93045';
+// Pink-red cross marker for Stylish exclusion bullets.
+const PINK = '#e5487f';
 const INK = '#161b22';
 const MUTED = '#687487';
 const LINE = '#d7e0ec';
@@ -1865,9 +1867,9 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
               .fontSize(13)
               .fillColor(NAVY)
               .text(label, M, top + 2, { width: CONTENT_W, lineBreak: false });
-            // One continuous card: a single rounded outer border in LINE on all
-            // four sides — no internal seam, no accent bar.
-            rounded(M, cardTop, CONTENT_W, cardHeight, '#ffffff', LINE, 10);
+            // Flight content sits directly on the white page — no outer
+            // container, border or background. All internal elements keep
+            // their positions relative to cardTop.
             const airlineLogo = segment.airlineId
               ? input.images?.airlines?.[segment.airlineId]
               : null;
@@ -2080,10 +2082,11 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
       .map((hotel, index) => ({ hotel, index }))
       .filter(({ hotel }) => hotel.selected);
     if (!selectedHotels.length) return;
-    const infoX = M + 136;
+    const infoX = M + 168;
     const textW = CONTENT_W - (infoX - M) - 10;
     const IMAGE_TOP_OFF = 11;
-    const IMAGE_H = 122;
+    const IMAGE_W = 138;
+    const IMAGE_H = 159;
     const HOTEL_GAP = 30;
 
     // Minimal vector calendar glyph (outline + hanger ticks + centre dot).
@@ -2203,9 +2206,9 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
     const drawBlock = (block: HotelBlock, top: number): number => {
       const { hotel, index } = block;
       let cy = top + 13;
-      if (!drawImage(input.images?.hotels?.[index], M + 17, top + IMAGE_TOP_OFF, 106, IMAGE_H)) {
-        doc.roundedRect(M + 17, top + IMAGE_TOP_OFF, 106, IMAGE_H, 7).fill('#e7edf4');
-        drawEmoji('🏨', M + 53, top + 54, 34);
+      if (!drawImage(input.images?.hotels?.[index], M + 17, top + IMAGE_TOP_OFF, IMAGE_W, IMAGE_H)) {
+        doc.roundedRect(M + 17, top + IMAGE_TOP_OFF, IMAGE_W, IMAGE_H, 7).fill('#e7edf4');
+        drawEmoji('🏨', M + 69, top + 73, 34);
       }
       doc
         .font('Bold')
@@ -2653,12 +2656,12 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
     };
     addServicePage(rows.length);
     for (const [rowInGroup, { service, index }] of rows.entries()) {
-      const rowHeight = 160;
       if (rowInGroup > 0 && rowInGroup % 3 === 0) {
         addServicePage(rows.length - rowInGroup);
       }
       const top = y;
-      rounded(M, top, CONTENT_W, rowHeight - 8, '#ffffff', LINE, 9);
+      // Listings sit directly on the white page — no outer card, border,
+      // background or shadow. Internal elements keep their positions.
       const imageLeft = true;
       const imageX = imageLeft ? M + 11 : W - M - 168;
       const imageW = 157;
@@ -2679,14 +2682,6 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
       ) {
         doc.roundedRect(imageX, imageTop, imageW, imageHeight, 10).fill('#e5edf4');
         drawEmoji(service.serviceType === 'CRUISE' ? '🚢' : '🚌', imageX + 58, imageTop + 33, 40);
-      } else {
-        // A subtle border makes the rounded clipping visible even for pale or
-        // edge-to-edge photographs. All four corners remain unobstructed.
-        doc
-          .roundedRect(imageX, imageTop, imageW, imageHeight, 10)
-          .lineWidth(0.7)
-          .strokeColor('#c7d5e6')
-          .stroke();
       }
       const tabWidth = 92;
       const tabX = imageLeft ? imageX : imageX + imageW - tabWidth;
@@ -2845,14 +2840,9 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
             : H;
         addContentPage('Add-On Services', pageHeight);
         const top = y;
-        // Use depth and spacing instead of a visible perimeter rule. The old
-        // outlined card plus inner panel created several competing borders.
-        doc
-          .save()
-          .roundedRect(M + 2, top + 4, CONTENT_W, card.height, 12)
-          .fill('#e8edf4')
-          .restore();
-        doc.save().roundedRect(M, top, CONTENT_W, card.height, 12).fill('#ffffff').restore();
+        // Content sits directly on the white page — no outer card, shadow or
+        // inner background panel. The navy title banner with its number disc,
+        // title and gold accent line is preserved exactly.
         doc.save().roundedRect(M, top, CONTENT_W, 62, 12).fill(NAVY).restore();
         doc.rect(M, top + 45, CONTENT_W, 17).fill(NAVY);
         doc.rect(M, top + 59, CONTENT_W, 3).fill(GOLD);
@@ -2875,11 +2865,6 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
             height: 25,
             ellipsis: true,
           });
-        doc
-          .save()
-          .roundedRect(M + 18, top + 78, CONTENT_W - 36, card.height - 96, 8)
-          .fill('#f5f7fb')
-          .restore();
         const cardLineHeight = 10 * 1.32;
         const textX = M + 30 + (card.image ? ADDON_IMAGE_W + ADDON_IMAGE_GAP : 0);
         if (card.image) {
@@ -2986,13 +2971,20 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
           const chunk = remaining.splice(0, availableLines);
           const sectionHeight = 46 + chunk.length * policyLineHeight;
           const top = y;
-          doc
-            .save()
-            .fillOpacity(0.08)
-            .roundedRect(M, top, CONTENT_W, 34, 8)
-            .fill(policy.color)
-            .restore();
-          doc.circle(M + 31, top + 17, 12).fill(policy.color);
+          // Child Policy uses the neutral treatment (light-grey header, navy
+          // badge and title) instead of the green accent used elsewhere.
+          const headerColor = policy.title === 'CHILD POLICY' ? NAVY : policy.color;
+          if (policy.title === 'CHILD POLICY') {
+            doc.save().roundedRect(M, top, CONTENT_W, 34, 8).fill(PALE_BLUE).restore();
+          } else {
+            doc
+              .save()
+              .fillOpacity(0.08)
+              .roundedRect(M, top, CONTENT_W, 34, 8)
+              .fill(policy.color)
+              .restore();
+          }
+          doc.circle(M + 31, top + 17, 12).fill(headerColor);
           doc
             .font('Bold')
             .fontSize(8)
@@ -3001,32 +2993,76 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
           doc
             .font('Bold')
             .fontSize(11)
-            .fillColor(policy.color)
+            .fillColor(headerColor)
             .text(`${policy.title}${continuation ? ' (CONTINUED)' : ''}`, M + 53, top + 12, {
               width: CONTENT_W - 74,
               height: 14,
               ellipsis: true,
             });
-          doc
-            .moveTo(M + 1, top)
-            .lineTo(M + 1, top + sectionHeight - 6)
-            .lineWidth(2)
-            .strokeColor(policy.color)
-            .stroke();
-          const end = drawRichLines(
-            chunk,
-            M + 31,
-            top + 40,
-            CONTENT_W - 62,
-            policySize,
-            INK,
-            policyLineFactor,
-          );
+          // Exclusion bullets arrive as typed "x" markers in saved content
+          // (after any list "•" prefix); render a proper cross glyph per row
+          // instead. Run-level bold formatting is preserved; other sections
+          // keep their existing rendering untouched.
+          let end: number;
+          if (policy.title === 'EXCLUSIONS') {
+            const drawCross = (cx: number, cy: number) => {
+              doc
+                .save()
+                .moveTo(cx, cy)
+                .lineTo(cx + 9, cy + 9)
+                .moveTo(cx + 9, cy)
+                .lineTo(cx, cy + 9)
+                .lineWidth(1.7)
+                .strokeColor(PINK)
+                .stroke()
+                .restore();
+            };
+            const crossX = M + 31;
+            const crossTextX = crossX + 16;
+            const crossTextW = CONTENT_W - 62 - 16;
+            let yy = top + 40;
+            for (const line of chunk) {
+              const runs = line.map((run) => ({ ...run }));
+              const joined = runs.map((run) => run.text).join('');
+              const marker = /^\s*(?:•\s*)?[xX](\s+|$)/.exec(joined);
+              let content: PdfRichTextLine = runs;
+              if (marker) {
+                let drop = marker[0].length;
+                content = [];
+                for (const run of runs) {
+                  if (drop <= 0) {
+                    content.push(run);
+                    continue;
+                  }
+                  if (run.text.length <= drop) {
+                    drop -= run.text.length;
+                    continue;
+                  }
+                  content.push({ text: run.text.slice(drop), bold: run.bold });
+                  drop = 0;
+                }
+                content = content.filter((run) => run.text.length > 0);
+                drawCross(crossX + 2, yy + 1.5);
+              }
+              yy = drawRichLines([content], crossTextX, yy, crossTextW, policySize, INK, policyLineFactor);
+            }
+            end = yy;
+          } else {
+            end = drawRichLines(
+              chunk,
+              M + 31,
+              top + 40,
+              CONTENT_W - 62,
+              policySize,
+              INK,
+              policyLineFactor,
+            );
+          }
           doc
             .moveTo(M + 29, end + 4)
             .lineTo(M + 170, end + 4)
             .lineWidth(0.7)
-            .strokeColor(policy.color)
+            .strokeColor(headerColor)
             .stroke();
           y = Math.max(top + sectionHeight, end + 10);
           continuation = true;
@@ -3042,6 +3078,10 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
             addContentPage('Policies', nextLayout.pageHeight);
           }
         }
+        // Generous whitespace between finished policy sections (roughly 4x
+        // the previous ~10pt rhythm). The next chunk's break check repages
+        // when the remaining space runs out, so this never clips content.
+        if (policyIndex < visiblePolicies.length - 1) y += 30;
       }
     }
   };

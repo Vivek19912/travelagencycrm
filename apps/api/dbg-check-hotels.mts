@@ -35,9 +35,10 @@ const raw = (await import('node:fs')).readFileSync(pdf).toString('latin1');
 check(!raw.includes('/URI (https://reviews.example.test'), 'no review URI objects');
 // 6. Stars below names, gold treatment preserved.
 for (const stars of ['★★★', '★★', '★★★★★']) check(all.includes(stars), `stars '${stars}' present`);
+const flatAll = all.replace(/\s+/g, ' ');
 // 7. Long addresses complete + wrapping (all words present, no ellipsis truncation of content).
 for (const frag of ['Padshahi Bagh Lasjan Rd', 'K P Bagh', 'Jammu and Kashmir', 'Jalan Ayer Hangat', '07000 Langkawi', 'Kedah, Malaysia', '6 Irrawaddy Road, Singapore 329543']) {
-  check(all.includes(frag), `address fragment '${frag}'`);
+  check(flatAll.includes(frag), `address fragment '${frag}'`);
 }
 // 8. Dates: both / only-in / only-out / neither. Shared pages prevent
 // per-page isolation, so single-hotel PDFs give exact label sets.
@@ -55,7 +56,6 @@ const tOut = single('hotels-single-checkout');
 check(tOut.includes('Check-out') && !tOut.includes('Check-in') && tOut.includes('05 Dec 2026'), 'check-out-only hotel: only its label+date');
 // 9. Rooms preserved incl. multi + extra bed + meal plans (layout wraps
 // long lines, so match whitespace-normalised text).
-const flatAll = flat(all);
 for (const room of ['Junior Suite Room', 'Extra Bed: 2', 'Suite Room', '4 Rooms', 'Deluxe Sea View with Balcony', 'Extra Bed: 1', 'Child W/O Bed: 1', 'Meal Plan 1', 'Meal Plan 2', 'Half Board', 'Meal Plan: Breakfast']) {
   check(flatAll.includes(room), `room text '${room}'`);
 }
