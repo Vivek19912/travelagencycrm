@@ -918,9 +918,9 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
   page1Scrim.stop(0, NAVY_DARK, 0.48).stop(0.5, NAVY_DARK, 0.2).stop(1, NAVY_DARK, 0);
   doc.save().rect(0, 0, W, 380).fill(page1Scrim).restore();
 
-  // Centred logo in the upper portion of the hero, with generous breathing room.
-  if (styledLogo) drawImage(styledLogo, W / 2 - 66, 48, 132, 106, 'contain', 0);
-  else {
+  // Centred cover identifier in the upper portion of the hero. The company
+  // name renders as text; no logo image is drawn here.
+  {
     doc
       .font('Bold')
       .fontSize(11)
@@ -2650,7 +2650,7 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
           : 'Travel Services';
     const addServicePage = (cardsRemaining: number) => {
       const cardsOnPage = Math.min(3, cardsRemaining);
-      const contentBottom = 133 + cardsOnPage * 169;
+      const contentBottom = 133 + cardsOnPage * 204;
       return addContentPage(
         servicesTitle,
         computePageHeight(contentBottom - PDF_TOP_MARGIN).pageHeight,
@@ -2664,11 +2664,12 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
       const top = y;
       // Listings sit directly on the white page — no outer card, border,
       // background or shadow. Internal elements keep their positions.
+      // Vehicle/cruise photos render +40% over the previous 157x110 size.
       const imageLeft = true;
       const imageX = imageLeft ? M + 11 : W - M - 168;
-      const imageW = 157;
+      const imageW = 219.8;
       const imageTop = top + 35;
-      const imageHeight = 110;
+      const imageHeight = 154;
       const imageMode = ['VEHICLE_TRANSFER', 'CRUISE'].includes(service.serviceType)
         ? 'contain'
         : 'cover';
@@ -2683,7 +2684,7 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
         )
       ) {
         doc.roundedRect(imageX, imageTop, imageW, imageHeight, 10).fill('#e5edf4');
-        drawEmoji(service.serviceType === 'CRUISE' ? '🚢' : '🚌', imageX + 58, imageTop + 33, 40);
+        drawEmoji(service.serviceType === 'CRUISE' ? '🚢' : '🚌', imageX + 90, imageTop + 57, 40);
       }
       const tabWidth = 92;
       const tabX = imageLeft ? imageX : imageX + imageW - tabWidth;
@@ -2704,8 +2705,8 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
             align: 'center',
           },
         );
-      const textX = imageLeft ? M + 188 : M + 20;
-      const textW = CONTENT_W - 210;
+      const textX = imageLeft ? imageX + imageW + 20 : M + 20;
+      const textW = CONTENT_W - (textX - M) - 22;
       doc
         .font('Bold')
         .fontSize(12)
@@ -2753,7 +2754,7 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
           height: 28,
           ellipsis: true,
         });
-      y = top + 169;
+      y = top + 204;
     }
   };
 
@@ -2806,13 +2807,21 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
       ];
       // Add-on snapshot image per service row (same inputs.services index as the
       // vehicle/cruise cards). Rows without a resolved image keep the legacy
-      // text-only card untouched.
-      const ADDON_IMAGE_W = 150;
-      const ADDON_IMAGE_H = 110;
+      // text-only card untouched. Images render +40% over the previous
+      // 150x110 size.
+      const ADDON_IMAGE_W = 210;
+      const ADDON_IMAGE_H = 154;
       const ADDON_IMAGE_GAP = 16;
+      const ADDON_TITLE_X = 78;
       const measuredCards = cards.map((card) => {
         const image = card.index != null ? (input.images?.services?.[card.index] ?? null) : null;
         const textW = image ? CONTENT_W - 60 - ADDON_IMAGE_W - ADDON_IMAGE_GAP : CONTENT_W - 60;
+        // Full add-on title: wrapping, measured, never truncated.
+        doc.font('Bold').fontSize(15);
+        const titleW = CONTENT_W - ADDON_TITLE_X - 10;
+        const titleH = Math.max(19, doc.heightOfString(card.name, { width: titleW }));
+        const titleBlockH = Math.max(34, titleH);
+        const contentTopOff = titleBlockH + 12;
         // Pre-wrap and measure exactly like drawRichLines so the card height
         // matches the real content; an estimated height can undershoot and push
         // long copy into the footer.
@@ -2828,7 +2837,10 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
           image,
           textW,
           gridH,
-          height: Math.min(610, Math.max(190, 116 + bodyHeight + gridH)),
+          titleW,
+          titleBlockH,
+          contentTopOff,
+          height: Math.min(610, Math.max(150, contentTopOff + bodyHeight + gridH + 20)),
         };
       });
       for (const [cardIndex, card] of measuredCards.entries()) {
@@ -2842,18 +2854,15 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
             : H;
         addContentPage('Add-On Services', pageHeight);
         const top = y;
-        // Content sits directly on the white page — no outer card, shadow or
-        // inner background panel. The navy title banner with its number disc,
-        // title and gold accent line is preserved exactly.
-        doc.save().roundedRect(M, top, CONTENT_W, 62, 12).fill(NAVY).restore();
-        doc.rect(M, top + 45, CONTENT_W, 17).fill(NAVY);
-        doc.rect(M, top + 59, CONTENT_W, 3).fill(GOLD);
-        doc.circle(M + 32, top + 31, 17).fill(GOLD);
+        // Number disc plus full wrapping title directly on the white page —
+        // no navy banner, no gold rule, no truncation. Image, description
+        // and pricing keep their order below the title.
+        doc.circle(M + 47, top + 17, 17).fill(GOLD);
         doc
           .font('Bold')
           .fontSize(11)
           .fillColor(NAVY)
-          .text(String(cardIndex + 1).padStart(2, '0'), M + 17, top + 25, {
+          .text(String(cardIndex + 1).padStart(2, '0'), M + 32, top + 10, {
             width: 30,
             align: 'center',
             lineBreak: false,
@@ -2861,19 +2870,18 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
         doc
           .font('Bold')
           .fontSize(15)
-          .fillColor('#ffffff')
-          .text(card.name, M + 62, top + 21, {
-            width: CONTENT_W - 155,
-            height: 25,
-            ellipsis: true,
+          .fillColor(NAVY)
+          .text(card.name, M + ADDON_TITLE_X, top + 8, {
+            width: card.titleW,
           });
         const cardLineHeight = 10 * 1.32;
         const textX = M + 30 + (card.image ? ADDON_IMAGE_W + ADDON_IMAGE_GAP : 0);
+        const contentTop = top + card.contentTopOff;
         if (card.image) {
-          if (!drawImage(card.image, M + 30, top + 92, ADDON_IMAGE_W, ADDON_IMAGE_H, 'cover', 8)) {
+          if (!drawImage(card.image, M + 30, contentTop, ADDON_IMAGE_W, ADDON_IMAGE_H, 'cover', 8)) {
             doc
               .save()
-              .roundedRect(M + 30, top + 92, ADDON_IMAGE_W, ADDON_IMAGE_H, 8)
+              .roundedRect(M + 30, contentTop, ADDON_IMAGE_W, ADDON_IMAGE_H, 8)
               .fill('#e5edf4')
               .restore();
           }
@@ -2882,16 +2890,16 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
           0,
           Math.max(
             0,
-            Math.floor((card.height - 92 - (card.gridH ? card.gridH + 8 : 0)) / cardLineHeight),
+            Math.floor((card.height - card.contentTopOff - (card.gridH ? card.gridH + 8 : 0)) / cardLineHeight),
           ),
         );
-        drawRichLines(onCard, textX, top + 92, card.textW, 10, INK, 1.32);
+        drawRichLines(onCard, textX, contentTop, card.textW, 10, INK, 1.32);
         if (card.boxes.length)
           drawAddonPricingGrid(
             doc,
             card.boxes,
             textX,
-            top + 92 + onCard.length * cardLineHeight + 8,
+            contentTop + onCard.length * cardLineHeight + 8,
             card.textW,
           );
         y = top + card.height + 14;
@@ -3060,12 +3068,6 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
               policyLineFactor,
             );
           }
-          doc
-            .moveTo(M + 29, end + 4)
-            .lineTo(M + 170, end + 4)
-            .lineWidth(0.7)
-            .strokeColor(headerColor)
-            .stroke();
           y = Math.max(top + sectionHeight, end + 10);
           continuation = true;
           if (remaining.length) {

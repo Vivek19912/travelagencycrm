@@ -6,16 +6,22 @@ const mk = (r: number, g: number, b: number) =>
   sharp({ create: { width: 600, height: 400, channels: 3, background: { r, g, b } } })
     .png()
     .toBuffer();
+// Vehicle/cruise photos use `contain` fit, so these match the 219.8x154 box
+// aspect exactly (full-bleed measurement); add-on/hero art uses `cover`.
+const mkBox = (r: number, g: number, b: number) =>
+  sharp({ create: { width: 620, height: 434, channels: 3, background: { r, g, b } } })
+    .png()
+    .toBuffer();
 const hero = await mk(96, 128, 168);
 const logo = await mk(212, 164, 65);
 const fh = await mk(150, 90, 60);
 const hh1 = await mk(60, 140, 100);
 const hh2 = await mk(60, 100, 160);
 const hh3 = await mk(140, 120, 60);
-const vh1 = await mk(160, 60, 60);
-const vh2 = await mk(60, 160, 140);
-const ch1 = await mk(140, 60, 140);
-const ad1 = await mk(90, 110, 150);
+const vh1 = await mkBox(160, 60, 60);
+const vh2 = await mkBox(60, 160, 140);
+const ch1 = await mkBox(140, 60, 140);
+const ad1 = await mk(200, 50, 150);
 const ad2 = await mk(110, 90, 120);
 
 const flightDetails = {
@@ -95,7 +101,7 @@ const services = [
     ],
   },
   {
-    serviceType: 'OTHER_ADD_ON', addOnServiceId: 'addon-visa', name: 'Visa Assistance', city: null, notes: null,
+    serviceType: 'OTHER_ADD_ON', addOnServiceId: 'addon-visa', name: 'Visa Assistance With Complete Documentation Support and Appointment Scheduling Services', city: null, notes: null,
     description: 'Complete visa documentation support with appointment scheduling.',
     quantity: 1, unitSellingPrice: 0,
     pricingSnapshot: [{ id: 'p3', label: 'Per Person', price: 1500, currency: 'INR' }],
