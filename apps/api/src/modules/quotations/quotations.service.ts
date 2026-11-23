@@ -125,6 +125,34 @@ export function normalizeWeblinkIp(value: string | null | undefined): string {
 }
 
 /**
+ * Customer-friendly Stylish PDF download filename: `{Customer Name} Package.pdf`.
+ *
+ * Download-only: stored object keys and `quotationDocument.fileName` values keep
+ * their archival names (`QT-…-v…-stylish-quotation.pdf`). This value is passed
+ * as the display filename when signing a download URL, so the browser saves
+ * `Vikas Sahni Package.pdf`. Spaces are preserved; filesystem-invalid
+ * characters (`<>:"/\\|?*` and controls) are removed, whitespace is collapsed,
+ * and a missing/blank name falls back to `Travel Package.pdf`. Always `.pdf`.
+ */
+export function stylishPdfDownloadFileName(customerName: string | null | undefined): string {
+  const printable = [...(customerName ?? '')]
+    .filter((ch) => {
+      const code = ch.codePointAt(0) ?? 32;
+      return code >= 32 && code !== 127;
+    })
+    .join('');
+  const clean = printable
+    .replace(/[<>:"/\\|?*]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^\.+/, '')
+    .slice(0, 120)
+    .trim()
+    .replace(/[. ]+$/, '');
+  return `${clean || 'Travel'} Package.pdf`;
+}
+
+/**
  * Customer-friendly Weblink PDF filename: `{customer-slug}-quotation.pdf`.
  *
  * Weblink-only: Classic (`<number>-<customer>-v<n>-quotation.pdf`) and Stylish
@@ -4521,7 +4549,7 @@ export const quotationsService = {
     documentId: string,
     disposition: 'attachment' | 'inline' = 'attachment',
   ) {
-    await getQuotation(auth, id);
+    const quotation = await getQuotation(auth, id);
     const document = await prisma.quotationDocument.findFirst({
       where: {
         id: documentId,
@@ -4532,10 +4560,19 @@ export const quotationsService = {
       },
     });
     if (!document) throw new NotFoundError('Document not found.');
+    // Stylish quotation PDFs download under the customer-friendly
+    // `{Customer Name} Package.pdf` name. Stored object keys and document
+    // rows keep their archival names; only the signed-URL display filename
+    // changes. Classic/Weblink PDFs and attachments are untouched.
+    const displayFileName =
+      document.documentType === 'QUOTATION_PDF' &&
+      document.fileName.endsWith('-stylish-quotation.pdf')
+        ? stylishPdfDownloadFileName(quotation.customerName)
+        : document.fileName;
     return {
       url: await storageService.createDownloadUrl(
         document.objectKey,
-        document.fileName,
+        displayFileName,
         undefined,
         disposition,
       ),

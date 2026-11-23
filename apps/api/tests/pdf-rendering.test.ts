@@ -557,12 +557,12 @@ describe('Stylish quotation PDF', () => {
     expect(visible).not.toContain('duplicate flight card');
     expect(visible).not.toContain('duplicate hotel card');
     expect(visible).not.toContain('duplicate sightseeing card');
-    expect(pdfTextPage(pdf, 3)).toContain('TRANSPORTATION');
-    expect(pdfTextPage(pdf, 3)).not.toContain('CRUISE DETAILS');
-    expect(pdfTextPage(pdf, 4)).toContain('CRUISE DETAILS');
+    expect(pdfTextPage(pdf, 3)).toContain('CRUISE DETAILS');
+    expect(pdfTextPage(pdf, 3)).not.toContain('TRANSPORTATION');
+    expect(pdfTextPage(pdf, 4)).toContain('TRANSPORTATION');
     expect(pdfTextPage(pdf, 4)).not.toContain('ADD-ON SERVICES');
     expect(pdfTextPage(pdf, 5)).toContain('ADD-ON SERVICES');
-    expect(pdfTextPage(pdf, 5)).not.toContain('CRUISE DETAILS');
+    expect(pdfTextPage(pdf, 5)).not.toContain('TRANSPORTATION');
     expect(visible).not.toContain('5,000');
   });
 
@@ -3575,7 +3575,8 @@ describe('Destination Expert and FAQs in both PDF styles', () => {
 
 // =============================================================================
 // Section reorder — ONE shared saved order (the quotation's weblinkSectionOrder)
-// drives BOTH PDF styles. No custom order → the legacy PDF layout is kept.
+// drives BOTH PDF styles. No custom order → Classic keeps the legacy layout
+// while Stylish uses its own default sequence.
 // =============================================================================
 
 const reorderHotel = {
@@ -3698,23 +3699,35 @@ describe('PDF section reorder (single shared weblink order)', () => {
     const absent = reorderInput(undefined); // key omitted entirely (old snapshots)
     const empty = reorderInput(null); // normalized null on newer rows
     for (const input of [absent, empty]) {
-      for (const rendered of [
-        await renderQuotationPdf(input),
-        await renderStylishQuotationPdf(input),
-      ]) {
-        const lower = pdfText(rendered).toLowerCase();
-        const flightsAt = lower.indexOf('flyfast airways');
-        const hotelsAt = lower.indexOf('reorder grand hotel');
-        const itineraryAt = lower.indexOf('panoramic city orientation drive');
-        const policiesAt = lower.indexOf('depositprotectionmarker');
-        const faqAt = lower.indexOf('frequently asked questions');
-        expect(flightsAt).toBeGreaterThanOrEqual(0);
-        expect(hotelsAt).toBeGreaterThan(flightsAt);
-        expect(itineraryAt).toBeGreaterThan(hotelsAt);
-        expect(policiesAt).toBeGreaterThan(itineraryAt);
-        expect(faqAt).toBeGreaterThan(policiesAt);
-        expect(pdfTextPage(rendered, pageCount(rendered))).toMatch(/THANK\s+YOU/i);
-      }
+      // Classic keeps the legacy default sequence.
+      const classicRendered = await renderQuotationPdf(input);
+      const classicLower = pdfText(classicRendered).toLowerCase();
+      const classicFlightsAt = classicLower.indexOf('flyfast airways');
+      const classicHotelsAt = classicLower.indexOf('reorder grand hotel');
+      const classicItineraryAt = classicLower.indexOf('panoramic city orientation drive');
+      const classicPoliciesAt = classicLower.indexOf('depositprotectionmarker');
+      const classicFaqAt = classicLower.indexOf('frequently asked questions');
+      expect(classicFlightsAt).toBeGreaterThanOrEqual(0);
+      expect(classicHotelsAt).toBeGreaterThan(classicFlightsAt);
+      expect(classicItineraryAt).toBeGreaterThan(classicHotelsAt);
+      expect(classicPoliciesAt).toBeGreaterThan(classicItineraryAt);
+      expect(classicFaqAt).toBeGreaterThan(classicPoliciesAt);
+      expect(pdfTextPage(classicRendered, pageCount(classicRendered))).toMatch(/THANK\s+YOU/i);
+      // Stylish uses its own default sequence: itinerary, hotels, flights,
+      // cruise, transportation, services, add-ons, policies, then FAQs.
+      const stylishRendered = await renderStylishQuotationPdf(input);
+      const stylishLower = pdfText(stylishRendered).toLowerCase();
+      const stylishItineraryAt = stylishLower.indexOf('panoramic city orientation drive');
+      const stylishHotelsAt = stylishLower.indexOf('reorder grand hotel');
+      const stylishFlightsAt = stylishLower.indexOf('flyfast airways');
+      const stylishPoliciesAt = stylishLower.indexOf('depositprotectionmarker');
+      const stylishFaqAt = stylishLower.indexOf('frequently asked questions');
+      expect(stylishItineraryAt).toBeGreaterThanOrEqual(0);
+      expect(stylishHotelsAt).toBeGreaterThan(stylishItineraryAt);
+      expect(stylishFlightsAt).toBeGreaterThan(stylishHotelsAt);
+      expect(stylishPoliciesAt).toBeGreaterThan(stylishFlightsAt);
+      expect(stylishFaqAt).toBeGreaterThan(stylishPoliciesAt);
+      expect(pdfTextPage(stylishRendered, pageCount(stylishRendered))).toMatch(/THANK\s+YOU/i);
     }
   });
 

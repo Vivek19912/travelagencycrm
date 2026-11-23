@@ -3279,9 +3279,11 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
   };
 
   // =========================================================================
-  // SECTION DISPATCH — one shared order for both PDF styles. The saved
-  // weblink order drives the sequence; when nothing is saved the legacy PDF
-  // layout is preserved exactly.
+  // SECTION DISPATCH — the saved weblink order drives the sequence when one
+  // is saved (shared with Classic/Weblink); otherwise Stylish renders its own
+  // default sequence: itinerary, hotels, flights, cruise, transportation,
+  // services, add-ons, policies, destination expert, FAQs. Classic keeps the
+  // legacy default in pdf.service.ts.
   // =========================================================================
   const sectionDrawers: Partial<Record<QuotationPdfSectionId, () => void>> = {
     flights: drawFlightsSection,
@@ -3295,7 +3297,23 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
     destinationExpert: drawDestinationExpertSection,
     faqs: drawFaqsSection,
   };
-  for (const id of resolveQuotationPdfSectionOrder(input.version.weblinkSectionOrder)) {
+  const savedSectionOrder: unknown = input.version.weblinkSectionOrder;
+  const sectionOrder: QuotationPdfSectionId[] =
+    Array.isArray(savedSectionOrder) && savedSectionOrder.length > 0
+      ? resolveQuotationPdfSectionOrder(savedSectionOrder)
+      : [
+          'itinerary',
+          'hotels',
+          'flights',
+          'cruise',
+          'transportation',
+          'services',
+          'addons',
+          'policies',
+          'destinationExpert',
+          'faqs',
+        ];
+  for (const id of sectionOrder) {
     sectionDrawers[id]?.();
   }
 
