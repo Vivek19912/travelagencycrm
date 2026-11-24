@@ -918,20 +918,6 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
   page1Scrim.stop(0, NAVY_DARK, 0.48).stop(0.5, NAVY_DARK, 0.2).stop(1, NAVY_DARK, 0);
   doc.save().rect(0, 0, W, 380).fill(page1Scrim).restore();
 
-  // Centred cover identifier in the upper portion of the hero. The company
-  // name renders as text; no logo image is drawn here.
-  {
-    doc
-      .font('Bold')
-      .fontSize(11)
-      .fillColor(PAGE1_GOLD)
-      .text((company?.name ?? 'TRAVEL COMPANY').toUpperCase(), M, 82, {
-        width: CONTENT_W,
-        align: 'center',
-        characterSpacing: 4,
-        lineBreak: false,
-      });
-  }
   // Cover hero typography: the customer name leads in Roboto Bold, with the
   // destination / package name directly below in the same family and white
   // colour at 60% of the lead size. No separator sits between the two
