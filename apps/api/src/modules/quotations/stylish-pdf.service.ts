@@ -2516,12 +2516,12 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
           }
         }
         // Day badge: the exact day.png artwork (calendar icon, navy plate,
-        // gold accent and the word "Day") with the dynamic itinerary day
-        // number overlaid in white bold immediately after "Day".
+        // gold accent). The embedded "Day" is masked out of the API asset;
+        // the complete "Day N" label is drawn in white Roboto Bold as one
+        // string, vertically centered on the navy plate.
         // day.png geometry (1280x720 canvas): navy plate x[141,1154]
-        // y[206,517]; "Day" glyphs x[559,799], cap-top 335, baseline 431
-        // (lettering reduced 30% from the original 137px cap height).
-        // The number starts at x=828 and must end left of x=1071.
+        // y[206,517], center row 361.5; text zone x[530,1071].
+        // Label glyphs keep the approved 30%-reduced size.
         const badgeX = M + 12 - 12;
         const badgeY = top + 12 - 10;
         // Emergency fallback (previous approved vector badge). Used ONLY when
@@ -2551,31 +2551,51 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
             const badgeImgX = badgeX - 141 * badgeScale;
             const badgeImgY = badgeY - 206 * badgeScale;
             doc.image(DAY_BADGE_IMAGE, badgeImgX, badgeImgY, { width: badgeW });
-            const dayNumText = String(dayNum);
-            // Number zone in day.png pixels. The navy right edge slants left
-            // going down (1139 at row 280 down to 1059 at row 480), so the
-            // digit bottoms near the baseline bind: they must end left of
-            // x=1071 to stay fully inside navy and off the gold accent.
-            // Number matches the resized Day lettering (96px cap, Roboto
-            // Bold ratio 0.711). The start keeps a true word-space gap after "Day" so the two
-            // read as one connected label with identical spacing every day.
-            const numStartPx = 840;
-            const numEndLimitPx = 1071;
-            const numStartX = badgeImgX + numStartPx * badgeScale;
-            const maxNumW = (numEndLimitPx - numStartPx) * badgeScale;
-            const numSize = ((431 - 335) * badgeScale) / 0.711;
+            const dayLabel = `Day ${dayNum}`;
+            // Complete label, one string: the PNG Day is masked out of the
+            // API asset, and "Day N" is drawn in white Roboto Bold,
+            // vertically centered on the navy plate as one visual unit.
+            // Visible glyph tops, Roboto Bold unitsPerEm 2048 (measured);
+            // bottom is always the "y" descender (-437).
+            const LABEL_TOP_U: Record<string, number> = {
+              D: 1456, a: 1102, y: 1082, "0": 1476, "1": 1459, "2": 1477,
+              "3": 1477, "4": 1456, "5": 1456, "6": 1471, "7": 1456,
+              "8": 1477, "9": 1477,
+            };
+            const LABEL_BOT_U = 437;
+            let labelTopU = 1456;
+            for (const ch of dayLabel) {
+              const topU: number | undefined = LABEL_TOP_U[ch];
+              if (topU !== undefined && topU > labelTopU) labelTopU = topU;
+            }
+            // Text zone: right of the calendar (ends x=474) to the
+            // slant-aware navy right limit; the group is centered in it.
+            const labelZoneLeftPx = 530;
+            const labelEndLimitPx = 1071;
+            const numSize = (96 * badgeScale) / (1456 / 2048);
             doc.font('RobotoBold').fontSize(numSize);
-            const naturalNumW = doc.widthOfString(dayNumText);
-            const numScaleX = naturalNumW > 0 ? Math.min(1, maxNumW / naturalNumW) : 1;
-            const numBaselineY = badgeImgY + 431 * badgeScale;
+            const naturalLabelW = doc.widthOfString(dayLabel);
+            const zoneW = (labelEndLimitPx - labelZoneLeftPx) * badgeScale;
+            const labelScaleX = naturalLabelW > 0 ? Math.min(1, zoneW / naturalLabelW) : 1;
+            const labelW = naturalLabelW * labelScaleX;
+            const labelStartPx =
+              labelZoneLeftPx + (labelEndLimitPx - labelZoneLeftPx - labelW / badgeScale) / 2;
+            const labelX = badgeImgX + labelStartPx * badgeScale;
+            // Vertical centering: visible-bounds center equals the navy
+            // plate center (row 361.5 of the 1280x720 canvas).
+            const visTopPt = (labelTopU / 2048) * numSize;
+            const visBotPt = (LABEL_BOT_U / 2048) * numSize;
+            const navyCenterY = badgeImgY + 361.5 * badgeScale;
+            const labelBaselineY = navyCenterY + (visTopPt - visBotPt) / 2;
             doc.save();
-            if (numScaleX < 1) doc.transform(numScaleX, 0, 0, 1, numStartX * (1 - numScaleX), 0);
+            if (labelScaleX < 1)
+              doc.transform(labelScaleX, 0, 0, 1, labelX * (1 - labelScaleX), 0);
             doc
               .font('RobotoBold')
               .fontSize(numSize)
               .fillColor('#ffffff')
-              .text(dayNumText, numStartX, numBaselineY - 0.9282 * numSize, {
-                width: 200,
+              .text(dayLabel, labelX, labelBaselineY - (1900 / 2048) * numSize, {
+                width: 400,
                 lineBreak: false,
               });
             doc.restore();
