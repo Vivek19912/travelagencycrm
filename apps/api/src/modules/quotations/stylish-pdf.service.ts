@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import PDFDocument from 'pdfkit';
 import sharp from 'sharp';
 import {
@@ -73,13 +74,32 @@ const PAGE_HEADER_ASSET = [
 const PAGE_HEADER_IMAGE = PAGE_HEADER_ASSET ? readFileSync(PAGE_HEADER_ASSET) : null;
 
 // Exact day.png badge artwork (calendar icon, navy plate, gold accent and
-// the word "Day"). Served from the API assets so the server-side renderer
-// resolves it in local dev, after the production build and in deployment.
-const DAY_BADGE_ASSET = [
+// the word "Day"). Resolved from every location it can legitimately live in:
+// the API assets (dev, built output and deployment), the original web public
+// file, and relative to this module (dev servers started from any cwd).
+// First hit wins; a missing file must never silently drop the badge.
+const DAY_BADGE_CANDIDATES = [
   resolve(process.cwd(), 'apps/api/src/assets/stylish-day-badge.png'),
   resolve(process.cwd(), 'src/assets/stylish-day-badge.png'),
-].find((path) => existsSync(path));
-const DAY_BADGE_IMAGE = DAY_BADGE_ASSET ? readFileSync(DAY_BADGE_ASSET) : null;
+  resolve(process.cwd(), 'apps/web/public/day.png'),
+  resolve(process.cwd(), 'public/day.png'),
+  resolve(dirname(fileURLToPath(import.meta.url)), '../../assets/stylish-day-badge.png'),
+];
+const DAY_BADGE_ASSET = DAY_BADGE_CANDIDATES.find((path) => {
+  try {
+    return existsSync(path);
+  } catch {
+    return false;
+  }
+});
+let DAY_BADGE_IMAGE: Buffer | null = null;
+if (DAY_BADGE_ASSET) {
+  try {
+    DAY_BADGE_IMAGE = readFileSync(DAY_BADGE_ASSET);
+  } catch {
+    DAY_BADGE_IMAGE = null;
+  }
+}
 
 const loadStylishServiceIcon = (name: string): Buffer | null => {
   const path = [
@@ -2503,41 +2523,67 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
         // The number starts at x=930 and must end left of x=1066.
         const badgeX = M + 12 - 12;
         const badgeY = top + 12 - 10;
-        if (DAY_BADGE_IMAGE) {
-          const badgeScale = 30 / 312;
-          const badgeW = 1280 * badgeScale;
-          const badgeImgX = badgeX - 141 * badgeScale;
-          const badgeImgY = badgeY - 206 * badgeScale;
-          doc.image(DAY_BADGE_IMAGE, badgeImgX, badgeImgY, { width: badgeW });
-          const dayNumText = String(dayNum);
-          // Number zone in day.png pixels. The navy right edge slants left
-          // going down (1139 at row 280 down to 1059 at row 480), so the
-          // digit bottoms near the baseline bind: they must end left of
-          // x=1073 to stay fully inside navy and off the gold accent.
-          // Full Day-matched size always (Roboto Bold cap ratio 0.711);
-          // double-digit numbers fit via horizontal compression only —
-          // the vertical size is never reduced.
-          const numStartPx = 930;
-          const numEndLimitPx = 1066;
-          const numStartX = badgeImgX + numStartPx * badgeScale;
-          const maxNumW = (numEndLimitPx - numStartPx) * badgeScale;
-          const numSize = ((431 - 294) * badgeScale) / 0.711;
-          doc.font('RobotoBold').fontSize(numSize);
-          const naturalNumW = doc.widthOfString(dayNumText);
-          const numScaleX = naturalNumW > 0 ? Math.min(1, maxNumW / naturalNumW) : 1;
-          const numBaselineY = badgeImgY + 431 * badgeScale;
-          doc.save();
-          if (numScaleX < 1) doc.transform(numScaleX, 0, 0, 1, numStartX * (1 - numScaleX), 0);
+        // Emergency fallback (previous approved vector badge). Used ONLY when
+        // the PNG buffer is unavailable or fails to embed, so a day never
+        // renders badgeless. The PNG path below stays the primary renderer.
+        const drawVectorBadgeFallback = () => {
+          doc.font('Bold').fontSize(13);
+          const fallbackW = 28 + doc.widthOfString(`Day ${dayNum}`) + 10;
+          const fallbackH = 30;
+          doc.save().roundedRect(badgeX + 3, badgeY + 4, fallbackW, fallbackH, 7).fill(GOLD).restore();
+          doc.save().roundedRect(badgeX, badgeY, fallbackW, fallbackH, 7).fill(NAVY).restore();
+          drawBadgeCalendar(badgeX + 10, badgeY + 8, 14, '#ffffff');
           doc
-            .font('RobotoBold')
-            .fontSize(numSize)
+            .font('Bold')
+            .fontSize(13)
             .fillColor('#ffffff')
-            .text(dayNumText, numStartX, numBaselineY - 0.9282 * numSize, {
-              width: 200,
+            .text(`Day ${dayNum}`, badgeX + 30, badgeY + 7, {
+              width: fallbackW - 30 - 8,
               lineBreak: false,
             });
-          doc.restore();
+        };
+        let badgeDrawn = false;
+        if (DAY_BADGE_IMAGE) {
+          try {
+            const badgeScale = 30 / 312;
+            const badgeW = 1280 * badgeScale;
+            const badgeImgX = badgeX - 141 * badgeScale;
+            const badgeImgY = badgeY - 206 * badgeScale;
+            doc.image(DAY_BADGE_IMAGE, badgeImgX, badgeImgY, { width: badgeW });
+            const dayNumText = String(dayNum);
+            // Number zone in day.png pixels. The navy right edge slants left
+            // going down (1139 at row 280 down to 1059 at row 480), so the
+            // digit bottoms near the baseline bind: they must end left of
+            // x=1073 to stay fully inside navy and off the gold accent.
+            // Full Day-matched size always (Roboto Bold cap ratio 0.711);
+            // double-digit numbers fit via horizontal compression only —
+            // the vertical size is never reduced.
+            const numStartPx = 930;
+            const numEndLimitPx = 1066;
+            const numStartX = badgeImgX + numStartPx * badgeScale;
+            const maxNumW = (numEndLimitPx - numStartPx) * badgeScale;
+            const numSize = ((431 - 294) * badgeScale) / 0.711;
+            doc.font('RobotoBold').fontSize(numSize);
+            const naturalNumW = doc.widthOfString(dayNumText);
+            const numScaleX = naturalNumW > 0 ? Math.min(1, maxNumW / naturalNumW) : 1;
+            const numBaselineY = badgeImgY + 431 * badgeScale;
+            doc.save();
+            if (numScaleX < 1) doc.transform(numScaleX, 0, 0, 1, numStartX * (1 - numScaleX), 0);
+            doc
+              .font('RobotoBold')
+              .fontSize(numSize)
+              .fillColor('#ffffff')
+              .text(dayNumText, numStartX, numBaselineY - 0.9282 * numSize, {
+                width: 200,
+                lineBreak: false,
+              });
+            doc.restore();
+            badgeDrawn = true;
+          } catch {
+            badgeDrawn = false;
+          }
         }
+        if (!badgeDrawn) drawVectorBadgeFallback();
         // Approved header: bold navy title, date | destination row, meals
         // row and transport pill — all directly on the white page.
         let cy = top + 16;
