@@ -2519,8 +2519,9 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
         // gold accent and the word "Day") with the dynamic itinerary day
         // number overlaid in white bold immediately after "Day".
         // day.png geometry (1280x720 canvas): navy plate x[141,1154]
-        // y[206,517]; "Day" glyphs x[559,900], cap-top 294, baseline 431.
-        // The number starts at x=930 and must end left of x=1066.
+        // y[206,517]; "Day" glyphs x[559,799], cap-top 335, baseline 431
+        // (lettering reduced 30% from the original 137px cap height).
+        // The number starts at x=828 and must end left of x=1071.
         const badgeX = M + 12 - 12;
         const badgeY = top + 12 - 10;
         // Emergency fallback (previous approved vector badge). Used ONLY when
@@ -2554,15 +2555,15 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
             // Number zone in day.png pixels. The navy right edge slants left
             // going down (1139 at row 280 down to 1059 at row 480), so the
             // digit bottoms near the baseline bind: they must end left of
-            // x=1073 to stay fully inside navy and off the gold accent.
-            // Full Day-matched size always (Roboto Bold cap ratio 0.711);
-            // double-digit numbers fit via horizontal compression only —
-            // the vertical size is never reduced.
-            const numStartPx = 930;
-            const numEndLimitPx = 1066;
+            // x=1071 to stay fully inside navy and off the gold accent.
+            // Number matches the resized Day lettering (96px cap height,
+            // Roboto Bold cap ratio 0.711). Double digits fit uncompressed
+            // at this size; compression is only a safety net.
+            const numStartPx = 828;
+            const numEndLimitPx = 1071;
             const numStartX = badgeImgX + numStartPx * badgeScale;
             const maxNumW = (numEndLimitPx - numStartPx) * badgeScale;
-            const numSize = ((431 - 294) * badgeScale) / 0.711;
+            const numSize = ((431 - 335) * badgeScale) / 0.711;
             doc.font('RobotoBold').fontSize(numSize);
             const naturalNumW = doc.widthOfString(dayNumText);
             const numScaleX = naturalNumW > 0 ? Math.min(1, maxNumW / naturalNumW) : 1;
