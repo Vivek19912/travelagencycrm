@@ -56,8 +56,6 @@ const GOLD = '#fdbb16';
 const TEAL = '#0a6f98';
 const GREEN = '#0ea36d';
 const RED = '#d93045';
-// Pink-red cross marker for Stylish exclusion bullets.
-const PINK = '#e5487f';
 const INK = '#161b22';
 const MUTED = '#687487';
 const LINE = '#d7e0ec';
@@ -73,6 +71,15 @@ const PAGE_HEADER_ASSET = [
   resolve(process.cwd(), 'src/assets/stylish-pdf-page-header.png'),
 ].find((path) => existsSync(path));
 const PAGE_HEADER_IMAGE = PAGE_HEADER_ASSET ? readFileSync(PAGE_HEADER_ASSET) : null;
+
+// Exact day.png badge artwork (calendar icon, navy plate, gold accent and
+// the word "Day"). Served from the API assets so the server-side renderer
+// resolves it in local dev, after the production build and in deployment.
+const DAY_BADGE_ASSET = [
+  resolve(process.cwd(), 'apps/api/src/assets/stylish-day-badge.png'),
+  resolve(process.cwd(), 'src/assets/stylish-day-badge.png'),
+].find((path) => existsSync(path));
+const DAY_BADGE_IMAGE = DAY_BADGE_ASSET ? readFileSync(DAY_BADGE_ASSET) : null;
 
 const loadStylishServiceIcon = (name: string): Buffer | null => {
   const path = [
@@ -2401,8 +2408,6 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
         // Approved header layout (badge, title, date row, meals, transfer
         // pill): measured here, drawn below.
         const dayNum = day.dayNumber ?? dayIndex + 1;
-        doc.font('Bold').fontSize(13);
-        const badgeW = 28 + doc.widthOfString(`Day ${dayNum}`) + 10;
         const dayX = M + 12 + 198 + 18;
         const titleW = W - M - dayX - 10;
         const dayStrippedRaw = stripItineraryDayPrefixes(day.title);
@@ -2490,22 +2495,49 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
             drawEmoji('🌍', M + 90, top + 76, 42);
           }
         }
-        // Approved day badge: navy plate over a gold accent layer, calendar
-        // glyph and automatic "Day N" label, overlapping the image corner.
+        // Day badge: the exact day.png artwork (calendar icon, navy plate,
+        // gold accent and the word "Day") with the dynamic itinerary day
+        // number overlaid in white bold immediately after "Day".
+        // day.png geometry (1280x720 canvas): navy plate x[141,1154]
+        // y[206,517]; "Day" glyphs x[559,900], cap-top 294, baseline 431.
+        // The number starts at x=930 and must end left of x=1066.
         const badgeX = M + 12 - 12;
         const badgeY = top + 12 - 10;
-        const badgeH = 30;
-        doc.save().roundedRect(badgeX + 3, badgeY + 4, badgeW, badgeH, 7).fill(GOLD).restore();
-        doc.save().roundedRect(badgeX, badgeY, badgeW, badgeH, 7).fill(NAVY).restore();
-        drawBadgeCalendar(badgeX + 10, badgeY + 8, 14, '#ffffff');
-        doc
-          .font('Bold')
-          .fontSize(13)
-          .fillColor('#ffffff')
-          .text(`Day ${dayNum}`, badgeX + 30, badgeY + 7, {
-            width: badgeW - 30 - 8,
-            lineBreak: false,
-          });
+        if (DAY_BADGE_IMAGE) {
+          const badgeScale = 30 / 312;
+          const badgeW = 1280 * badgeScale;
+          const badgeImgX = badgeX - 141 * badgeScale;
+          const badgeImgY = badgeY - 206 * badgeScale;
+          doc.image(DAY_BADGE_IMAGE, badgeImgX, badgeImgY, { width: badgeW });
+          const dayNumText = String(dayNum);
+          // Number zone in day.png pixels. The navy right edge slants left
+          // going down (1139 at row 280 down to 1059 at row 480), so the
+          // digit bottoms near the baseline bind: they must end left of
+          // x=1073 to stay fully inside navy and off the gold accent.
+          // Full Day-matched size always (Roboto Bold cap ratio 0.711);
+          // double-digit numbers fit via horizontal compression only —
+          // the vertical size is never reduced.
+          const numStartPx = 930;
+          const numEndLimitPx = 1066;
+          const numStartX = badgeImgX + numStartPx * badgeScale;
+          const maxNumW = (numEndLimitPx - numStartPx) * badgeScale;
+          const numSize = ((431 - 294) * badgeScale) / 0.711;
+          doc.font('RobotoBold').fontSize(numSize);
+          const naturalNumW = doc.widthOfString(dayNumText);
+          const numScaleX = naturalNumW > 0 ? Math.min(1, maxNumW / naturalNumW) : 1;
+          const numBaselineY = badgeImgY + 431 * badgeScale;
+          doc.save();
+          if (numScaleX < 1) doc.transform(numScaleX, 0, 0, 1, numStartX * (1 - numScaleX), 0);
+          doc
+            .font('RobotoBold')
+            .fontSize(numSize)
+            .fillColor('#ffffff')
+            .text(dayNumText, numStartX, numBaselineY - 0.9282 * numSize, {
+              width: 200,
+              lineBreak: false,
+            });
+          doc.restore();
+        }
         // Approved header: bold navy title, date | destination row, meals
         // row and transport pill — all directly on the white page.
         let cy = top + 16;
@@ -2995,21 +3027,34 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
               height: 14,
               ellipsis: true,
             });
-          // Exclusion bullets arrive as typed "x" markers in saved content
-          // (after any list "•" prefix); render a proper cross glyph per row
-          // instead. Run-level bold formatting is preserved; other sections
-          // keep their existing rendering untouched.
+          // Exclusion items arrive with a leading list marker in saved content:
+          // a native "•" prefix (from <li> rows), a markdown "-" / "*",
+          // a typed "x" / "X", or a "×" cross — optionally combined
+          // ("• x ..."). Strip the marker and render a red circular icon
+          // with a white cross per row (same geometry as the green
+          // inclusion tick). Run-level bold formatting is preserved; other
+          // sections keep their existing rendering untouched.
           let end: number;
           if (policy.title === 'EXCLUSIONS') {
-            const drawCross = (cx: number, cy: number) => {
+            const drawExclusionIcon = (iconX: number, rowTop: number) => {
+              // Match the green inclusion tick size: inclusion ✅ emoji PNGs
+              // render at lineHeight * 0.88 in drawRichLines.
+              const diameter = policyLineHeight * 0.88;
+              const radius = diameter / 2;
+              const cx = iconX + radius;
+              const cy = rowTop + 0.2 + radius;
+              doc.save().circle(cx, cy, radius).fill(RED).restore();
+              const arm = radius * 0.52;
               doc
                 .save()
-                .moveTo(cx, cy)
-                .lineTo(cx + 9, cy + 9)
-                .moveTo(cx + 9, cy)
-                .lineTo(cx, cy + 9)
-                .lineWidth(1.7)
-                .strokeColor(PINK)
+                .strokeColor('#ffffff')
+                .lineWidth(1.5)
+                .lineCap('round')
+                .lineJoin('round')
+                .moveTo(cx - arm, cy - arm)
+                .lineTo(cx + arm, cy + arm)
+                .moveTo(cx + arm, cy - arm)
+                .lineTo(cx - arm, cy + arm)
                 .stroke()
                 .restore();
             };
@@ -3020,7 +3065,7 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
             for (const line of chunk) {
               const runs = line.map((run) => ({ ...run }));
               const joined = runs.map((run) => run.text).join('');
-              const marker = /^\s*(?:•\s*)?[xX](\s+|$)/.exec(joined);
+              const marker = /^\s*(?:[•\-*]\s*(?:[xX×]\s+|[-*]\s+)?|[xX×]\s+)/.exec(joined);
               let content: PdfRichTextLine = runs;
               if (marker) {
                 let drop = marker[0].length;
@@ -3038,9 +3083,67 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
                   drop = 0;
                 }
                 content = content.filter((run) => run.text.length > 0);
-                drawCross(crossX + 2, yy + 1.5);
+                drawExclusionIcon(crossX, yy);
               }
               yy = drawRichLines([content], crossTextX, yy, crossTextW, policySize, INK, policyLineFactor);
+            }
+            end = yy;
+          } else if (policy.title === 'INCLUSIONS') {
+            // Inclusion items arrive with a leading list marker: a native
+            // "•" prefix (from <li> rows), a markdown "-" / "*", or an
+            // existing checkmark glyph (✅ ✔ ☑ ✓) — optionally combined
+            // ("• ✅ ..."). Strip the marker and render a green circular
+            // icon with a white tick per row, mirroring the red exclusion
+            // icon geometry. Run-level bold formatting is preserved.
+            const drawInclusionIcon = (iconX: number, rowTop: number) => {
+              const diameter = policyLineHeight * 0.88;
+              const radius = diameter / 2;
+              const cx = iconX + radius;
+              const cy = rowTop + 0.2 + radius;
+              doc.save().circle(cx, cy, radius).fill(GREEN).restore();
+              doc
+                .save()
+                .strokeColor('#ffffff')
+                .lineWidth(1.5)
+                .lineCap('round')
+                .lineJoin('round')
+                .moveTo(cx - radius * 0.48, cy + radius * 0.02)
+                .lineTo(cx - radius * 0.08, cy + radius * 0.38)
+                .lineTo(cx + radius * 0.52, cy - radius * 0.34)
+                .stroke()
+                .restore();
+            };
+            const tickX = M + 31;
+            const tickTextX = tickX + 16;
+            const tickTextW = CONTENT_W - 62 - 16;
+            let yy = top + 40;
+            for (const line of chunk) {
+              const runs = line.map((run) => ({ ...run }));
+              const joined = runs.map((run) => run.text).join('');
+              const marker =
+                /^\s*(?:[•\-*]\s*(?:[✓✔☑✅]\uFE0F?\s+|[-*]\s+)?|[✓✔☑✅]\uFE0F?\s+)/.exec(
+                  joined,
+                );
+              let content: PdfRichTextLine = runs;
+              if (marker) {
+                let drop = marker[0].length;
+                content = [];
+                for (const run of runs) {
+                  if (drop <= 0) {
+                    content.push(run);
+                    continue;
+                  }
+                  if (run.text.length <= drop) {
+                    drop -= run.text.length;
+                    continue;
+                  }
+                  content.push({ text: run.text.slice(drop), bold: run.bold });
+                  drop = 0;
+                }
+                content = content.filter((run) => run.text.length > 0);
+                drawInclusionIcon(tickX, yy);
+              }
+              yy = drawRichLines([content], tickTextX, yy, tickTextW, policySize, INK, policyLineFactor);
             }
             end = yy;
           } else {

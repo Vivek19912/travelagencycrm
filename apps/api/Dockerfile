@@ -61,6 +61,7 @@ COPY --from=builder /app/node_modules/@prisma/client ./node_modules/@prisma/clie
 # Compiled server + reminder worker and the manifests.
 COPY --from=builder /app/apps/api/dist ./apps/api/dist
 COPY --from=builder /app/apps/api/src/assets/stylish-pdf-page-header.png ./apps/api/src/assets/stylish-pdf-page-header.png
+COPY --from=builder /app/apps/api/src/assets/stylish-day-badge.png ./apps/api/src/assets/stylish-day-badge.png
 COPY --from=builder /app/apps/api/src/assets/stylish-services ./apps/api/src/assets/stylish-services
 COPY --from=builder /app/apps/api/src/assets/stylish-overview ./apps/api/src/assets/stylish-overview
 COPY --from=builder /app/apps/api/src/assets/destination-expert ./apps/api/src/assets/destination-expert
