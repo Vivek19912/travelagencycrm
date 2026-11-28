@@ -2556,10 +2556,10 @@ export async function renderStylishQuotationPdf(input: QuotationPdfInput): Promi
             // going down (1139 at row 280 down to 1059 at row 480), so the
             // digit bottoms near the baseline bind: they must end left of
             // x=1071 to stay fully inside navy and off the gold accent.
-            // Number matches the resized Day lettering (96px cap height,
-            // Roboto Bold cap ratio 0.711). Double digits fit uncompressed
-            // at this size; compression is only a safety net.
-            const numStartPx = 828;
+            // Number matches the resized Day lettering (96px cap, Roboto
+            // Bold ratio 0.711). The start keeps a true word-space gap after "Day" so the two
+            // read as one connected label with identical spacing every day.
+            const numStartPx = 840;
             const numEndLimitPx = 1071;
             const numStartX = badgeImgX + numStartPx * badgeScale;
             const maxNumW = (numEndLimitPx - numStartPx) * badgeScale;
